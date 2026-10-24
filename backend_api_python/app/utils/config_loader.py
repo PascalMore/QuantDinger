@@ -263,7 +263,9 @@ def _convert_config_value(value: str, value_type: str) -> Any:
         elif value_type == 'float':
             return float(value)
         elif value_type == 'bool':
-            return bool(value) or value == '1' or value == 'true' or value == 'True'
+            # Only explicit truthy tokens enable a flag; everything else
+            # (false/0/off/no, empty, unknown) is disabled.
+            return str(value or '').strip().lower() in {'1', 'true', 'yes', 'on'}
         elif value_type == 'json':
             import json
             try:
