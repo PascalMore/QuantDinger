@@ -81,12 +81,12 @@ def test_atlascloud_openai_compatible_call_skips_response_format(monkeypatch):
         def json(self):
             return {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
 
-    def fake_post(url, headers, json, timeout):
-        captured.update({"url": url, "headers": headers, "json": json, "timeout": timeout})
+    def fake_post(url, *, headers, json_payload, timeout):
+        captured.update({"url": url, "headers": headers, "json": json_payload, "timeout": timeout})
         return FakeResponse()
 
-    monkeypatch.setattr("app.services.llm.requests.post", fake_post)
     service = LLMService(provider="atlascloud")
+    monkeypatch.setattr(service, "_llm_post", fake_post)
     monkeypatch.setattr(service, "get_max_tokens", lambda: 16384)
 
     out = service._call_openai_compatible(
