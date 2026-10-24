@@ -404,6 +404,11 @@ class LLMService:
         PROXY_URL is intentionally global for market data and broker/exchange APIs,
         but LLM providers should not be routed through it unless explicitly requested.
         This avoids failures such as host.docker.internal:7890 refusing LLM traffic.
+
+        Every call goes through one configured Session so the proxy policy is
+        identical for streaming and non-streaming requests. A module-level
+        requests.post() would build its own Session with trust_env enabled and
+        silently re-apply the system proxy that this method just disabled.
         """
         session = requests.Session()
         proxy_url = self._llm_proxy_url()
@@ -420,11 +425,6 @@ class LLMService:
             kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
 
         try:
-            if not stream and not proxy_url:
-                session.close()
-                post_kwargs = dict(kwargs)
-                post_kwargs.pop("stream", None)
-                return requests.post(url, **post_kwargs)
             response = session.post(url, **kwargs)
         except requests.exceptions.RequestException as exc:
             session.close()
