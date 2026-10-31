@@ -1,6 +1,6 @@
 import pytest
 
-from app.data_sources.native_crypto import NativeCryptoPublicClient
+from app.data_sources.native_crypto import NativeCryptoAPIError, NativeCryptoPublicClient
 
 
 @pytest.mark.parametrize(
@@ -196,3 +196,35 @@ def test_bitget_ticker_parses_change_rate_without_unbound_state(market_type, mon
     assert ticker["percentage"] == 1.25
     assert ticker["changePercent"] == 1.25
     assert ticker["timestamp"] == 1700000000123
+
+
+@pytest.mark.parametrize(
+    ("metadata", "error_code"),
+    [
+        ({"name": "BTC_USDT", "type": "direct"}, "gate.swapVolumeMetadataMissing"),
+        (
+            {"name": "BTC_USDT", "type": "direct", "quanto_multiplier": "0.01"},
+            "gate.swapVolumeHistoricalUnverified",
+        ),
+    ],
+)
+def test_gate_swap_rejects_missing_multiplier_or_unverified_snapshot(
+    metadata, error_code, monkeypatch
+):
+    """Synthetic current metadata is not historical applicability evidence."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    market = {
+        "id": "BTC_USDT", "settle": "USDT", "quote": "USDT", "info": metadata,
+    }
+    client.markets = {"BTC/USDT:USDT": market, "BTC/USDT": market}
+    monkeypatch.setattr(
+        client,
+        "_get",
+        lambda *_args, **_kwargs: [
+            {"t": 1700000000, "o": "100", "h": "110", "l": "90", "c": "105",
+             "v": "100", "sum": "123.45"},
+        ],
+    )
+
+    with pytest.raises(NativeCryptoAPIError, match=error_code):
+        client.fetch_ohlcv("BTC/USDT:USDT", "15m", since=1700000000000, limit=1)

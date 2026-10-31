@@ -340,16 +340,20 @@ class MetaCryptoPublicConfig(type):
 
     @property
     def PROXY(cls):
-        proxy_url = (os.getenv('PROXY_URL') or '').strip()
-        if proxy_url:
-            return proxy_url
+        """Explicit forced proxy for native public crypto exchange traffic.
 
-        for key in ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']:
-            value = (os.getenv(key) or '').strip()
-            if value:
-                return value
+        PROXY_URL is an explicit opt-in switch: when it is set, every exchange
+        request is forced through that proxy. When it is not set, this property
+        returns an empty string so the HTTP client does not pass an explicit
+        ``proxies=`` argument, letting the standard environment semantics apply
+        (HTTP_PROXY / HTTPS_PROXY in effect, NO_PROXY exclusions honored).
 
-        return ''
+        Falling back to HTTP(S)_PROXY here would be wrong: an explicit
+        ``proxies=`` argument takes precedence over NO_PROXY matching, so every
+        exchange request would be proxied unconditionally and hosts listed in
+        NO_PROXY (e.g. ``.gateio.ws``) could never be reached directly.
+        """
+        return (os.getenv('PROXY_URL') or '').strip()
 
 
 class CryptoPublicConfig(metaclass=MetaCryptoPublicConfig):

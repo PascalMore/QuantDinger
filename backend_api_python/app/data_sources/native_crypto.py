@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
@@ -98,6 +100,24 @@ def _float(value: Any) -> float:
         return 0.0
 
 
+# Fail-closed Gate swap volume unit error identifiers (DESIGN-06-002 V1.1
+# §3.2). These are deterministic unit/metadata failures: consumers must never
+# retry them, swap them for another venue's data, or return empty success.
+GATE_SWAP_VOLUME_ERROR_CODES = (
+    "gate.swapVolumeMetadataMissing",
+    "gate.swapVolumeMetadataInvalid",
+    "gate.swapVolumeHistoricalUnverified",
+    "gate.swapVolumeInvalid",
+    "gate.swapVolumeEvidenceMissing",
+)
+
+
+def _is_gate_swap_volume_error(exc: Any) -> bool:
+    """True only for the five fail-closed Gate swap volume unit errors."""
+    text = str(exc or "")
+    return any(code in text for code in GATE_SWAP_VOLUME_ERROR_CODES)
+
+
 def _ticker(
     *,
     symbol: str,
@@ -157,6 +177,11 @@ class NativeCryptoPublicClient:
         self._session_local = threading.local()
         self._proxies = {"http": proxy, "https": proxy} if proxy else None
         self._okx_host = str(okx_host or "www.okx.com").strip()
+        # Bounded Gate swap volume-evidence state (DESIGN-06-002 V1.1 §2.2):
+        # thread-local last-page store plus the metadata snapshot retrieval
+        # timestamp. No other venue keeps state here.
+        self._gate_swap_state = threading.local()
+        self._gate_swap_metadata_retrieved_at = ""
 
     def _throttle(self) -> None:
         with self._request_lock:
@@ -247,6 +272,10 @@ class NativeCryptoPublicClient:
                 if self.market_type == "swap":
                     markets.setdefault(f"{base}/{quote}", info)
             self.markets = markets
+            if self.id == "gate" and self.market_type == "swap":
+                self._gate_swap_metadata_retrieved_at = (
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                )
             return markets
 
     def _fetch_market_rows(self) -> List[Dict[str, Any]]:
@@ -586,7 +615,12 @@ class NativeCryptoPublicClient:
             if self.market_type == "swap":
                 params["contract"] = native
                 rows = self._get("https://api.gateio.ws/api/v4/futures/usdt/candlesticks", params)
-                parsed = [[int(row.get("t") or 0) * 1000, _float(row.get("o")), _float(row.get("h")), _float(row.get("l")), _float(row.get("c")), _float(row.get("v"))] for row in rows]
+                parsed = self._parse_gate_swap_ohlcv(
+                    rows,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    since_ms=int(since) if since is not None else None,
+                )
             else:
                 params["currency_pair"] = native
                 rows = self._get("https://api.gateio.ws/api/v4/spot/candlesticks", params)
@@ -607,7 +641,177 @@ class NativeCryptoPublicClient:
             raise ValueError(f"Unsupported crypto exchange: {self.id}")
         lower_bound = int(since) if since is not None else 0
         unique = {int(row[0]): row for row in parsed if row and int(row[0]) >= lower_bound}
-        return sorted(unique.values(), key=lambda row: row[0])[:limit]
+        return sorted(unique.values(), key=lambda row: row[0])
+
+    def _gate_swap_contract_metadata(self, native_contract: str) -> Dict[str, Any]:
+        """Return the Gate USDT-settled direct linear contract record, or raise.
+
+        Uses the ``load_markets()`` snapshot only (``markets[symbol].info``);
+        no per-bar metadata requests, no trading client, no credentials.
+        """
+        try:
+            self.load_markets()
+        except NativeCryptoAPIError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive, offline tested via mocks
+            raise NativeCryptoAPIError(
+                f"gate.swapVolumeMetadataMissing: cannot load contract metadata for "
+                f"{native_contract}: {exc}"
+            ) from exc
+        target = str(native_contract or "").strip().upper()
+        for market in (self.markets or {}).values():
+            if str(market.get("id") or "").upper() != target:
+                continue
+            settle = str(market.get("settle") or "").upper()
+            quote = str(market.get("quote") or "").upper()
+            info = market.get("info") or {}
+            contract_type = str(info.get("type") or "").lower()
+            if settle != "USDT" or contract_type != "direct":
+                raise NativeCryptoAPIError(
+                    f"gate.swapVolumeMetadataInvalid: contract {native_contract} is not a "
+                    f"USDT-settled direct linear contract (settle={settle or '<missing>'}, "
+                    f"type={contract_type or '<missing>'})"
+                )
+            return {"id": market.get("id"), "settle": settle, "info": info}
+        raise NativeCryptoAPIError(
+            f"gate.swapVolumeMetadataMissing: contract {native_contract} not found in the "
+            f"current Gate USDT futures market snapshot"
+        )
+
+    def _parse_gate_swap_ohlcv(
+        self,
+        rows: Iterable[Any],
+        *,
+        symbol: str,
+        timeframe: str,
+        since_ms: Optional[int],
+    ) -> List[List[Any]]:
+        """Parse Gate swap candlesticks into base-currency six-column OHLCV.
+
+        base = raw contracts * quanto_multiplier (applied once); quote volume is
+        the official ``sum`` only. Any metadata, unit or historical-applicability
+        failure raises a fail-closed ``gate.swapVolume*`` NativeCryptoAPIError;
+        raw contract counts are never silently forwarded as base volume.
+        """
+        parsed: List[List[Any]] = []
+        identity = {
+            "symbol": symbol,
+            "interval": timeframe,
+            "since_ms": since_ms,
+            "native_contract": self._native_symbol(symbol),
+        }
+        page_evidence: List[Dict[str, Any]] = []
+        for row in rows:
+            bar_open_utc = int(row.get("t") or 0) * 1000
+            raw_quote_sum = row.get("sum")
+            metadata = self._gate_swap_contract_metadata(identity["native_contract"])
+            info = metadata["info"]
+            raw_multiplier = info.get("quanto_multiplier")
+            if raw_multiplier is None:
+                raise NativeCryptoAPIError(
+                    f"gate.swapVolumeMetadataMissing: quanto_multiplier missing for "
+                    f"{identity['native_contract']}"
+                )
+            try:
+                multiplier = float(raw_multiplier)
+            except (TypeError, ValueError) as exc:
+                raise NativeCryptoAPIError(
+                    f"gate.swapVolumeMetadataInvalid: quanto_multiplier "
+                    f"{raw_multiplier!r} for {identity['native_contract']} is not numeric"
+                ) from exc
+            if not math.isfinite(multiplier) or multiplier <= 0:
+                raise NativeCryptoAPIError(
+                    f"gate.swapVolumeMetadataInvalid: quanto_multiplier "
+                    f"{raw_multiplier!r} for {identity['native_contract']} is not a "
+                    f"finite positive number"
+                )
+            raw_v_contracts = _float(row.get("v"))
+            if raw_v_contracts <= 0:
+                raise NativeCryptoAPIError(
+                    f"gate.swapVolumeInvalid: raw contract volume "
+                    f"{row.get('v')!r} for {identity['native_contract']} at bar "
+                    f"{bar_open_utc} is not positive"
+                )
+            quote_volume: Optional[float]
+            if raw_quote_sum is None or str(raw_quote_sum).strip() == "":
+                quote_volume = None
+            else:
+                quote_volume = _float(raw_quote_sum)
+                if not math.isfinite(quote_volume) or quote_volume < 0:
+                    raise NativeCryptoAPIError(
+                        f"gate.swapVolumeInvalid: quote sum {raw_quote_sum!r} for "
+                        f"{identity['native_contract']} at bar {bar_open_utc} is not a "
+                        f"finite non-negative number"
+                    )
+            base_volume = raw_v_contracts * multiplier
+            parsed.append([
+                bar_open_utc,
+                _float(row.get("o")),
+                _float(row.get("h")),
+                _float(row.get("l")),
+                _float(row.get("c")),
+                base_volume,
+            ])
+            page_evidence.append({
+                "exchange_id": "gate",
+                "market_type": "swap",
+                "settle": metadata["settle"],
+                "native_contract": identity["native_contract"],
+                "bar_open_utc": datetime.fromtimestamp(
+                    bar_open_utc / 1000.0, tz=timezone.utc
+                ).isoformat().replace("+00:00", "Z"),
+                "interval": timeframe,
+                "raw_v_contracts": raw_v_contracts,
+                "raw_quote_sum": raw_quote_sum,
+                "quanto_multiplier": raw_multiplier,
+                "base_volume": base_volume,
+                "quote_volume": quote_volume,
+                "volume_unit": "base",
+                "source_endpoint": "https://api.gateio.ws/api/v4/futures/usdt/candlesticks",
+                "retrieved_at_utc": datetime.now(timezone.utc)
+                    .isoformat().replace("+00:00", "Z"),
+                "metadata_source": "load_markets:/api/v4/futures/usdt/contracts",
+                "metadata_retrieved_at_utc": self._gate_swap_metadata_retrieved_at or None,
+                "effective_from": None,
+                "effective_to": None,
+                "historical_applicability": "unknown",
+                "normalization_version": "gate_swap_base_v1",
+            })
+        state = self._gate_swap_state
+        state.identity = identity
+        state.bars = {item["bar_open_utc"]: item for item in page_evidence}
+        return parsed
+
+    def get_gate_swap_volume_evidence(
+        self,
+        symbol: str,
+        timeframe: str,
+        timestamp_ms: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Read-only last-page volume evidence for one bar (DESIGN-06-002 §3.2).
+
+        Returns None unless the identity (symbol, interval, request window) of
+        the most recent fetch on this thread matches exactly — evidence is never
+        borrowed across symbols, timeframes or pagination windows.
+        """
+        state = getattr(self, "_gate_swap_state", None)
+        if state is None:
+            return None
+        identity = getattr(state, "identity", None)
+        bars = getattr(state, "bars", None)
+        if not identity or not bars:
+            return None
+        native_contract = self._native_symbol(symbol)
+        since_ms = identity.get("since_ms")
+        matches = (
+            identity.get("symbol") == symbol
+            and identity.get("interval") == timeframe
+            and identity.get("native_contract") == native_contract
+            and (since_ms is None or timestamp_ms >= int(since_ms))
+        )
+        if not matches:
+            return None
+        return bars.get(int(timestamp_ms))
 
 
 def create_native_crypto_client(
