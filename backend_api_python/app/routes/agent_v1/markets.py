@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 from app.data.market_symbols_seed import (
     get_hot_symbols as seed_get_hot_symbols,
@@ -20,6 +21,11 @@ from ._helpers import clip_int, envelope, error
 
 logger = get_logger(__name__)
 _kline_service = KlineService()
+
+
+def _now_utc() -> datetime:
+    """Server-side UTC clock, injectable seam kept minimal for tests."""
+    return datetime.now(timezone.utc)
 
 
 _MARKETS = [
@@ -76,26 +82,80 @@ def market_symbols(market: str):
 @agent_v1_bp.route("/klines", methods=["GET"])
 @agent_required(SCOPE_R)
 def klines():
-    """OHLCV bars.
+    """OHLCV bars (legacy) or training OHLC bars (data_mode=training_ohlc).
 
     Query params:
         market, symbol     (required)
         timeframe          (default 1D)
-        limit              1..2000 (default 300)
-        before_time        unix seconds (optional, for backwards pagination)
+        limit              1..2000 (default 300); training: 2..365 (default 365)
+        before_time        unix seconds (optional, for backwards pagination);
+                           training: required, a past UTC midnight
+        data_mode          ohlcv (default) | training_ohlc
+        exchange_id, market_type  training-only identity routing (gate/swap)
+
+    Authorization (scope R, market, instrument) happens before any provider
+    call in both modes; the legacy OHLCV branch below is untouched.
     """
     market = (request.args.get("market") or "").strip()
     symbol = (request.args.get("symbol") or "").strip()
-    timeframe = (request.args.get("timeframe") or "1D").strip()
-    limit = clip_int(request.args.get("limit"), default=300, lo=1, hi=2000)
-    before_raw = request.args.get("before_time") or request.args.get("beforeTime")
 
+    data_mode = (request.args.get("data_mode") or "ohlcv").strip()
+    if data_mode not in ("ohlcv", "training_ohlc"):
+        return error(400, "training.invalidRequest",
+                     details={"reason": "training.invalidRequest"}, http=400)
+
+    if data_mode == "ohlcv" and any(
+            name in request.args for name in ("exchange_id", "market_type")):
+        return error(400, "training.invalidRequest",
+                     details={"reason": "training.invalidRequest"}, http=400)
     if not market or not symbol:
+        if data_mode == "training_ohlc":
+            return error(400, "training.invalidRequest",
+                         details={"reason": "training.invalidRequest"}, http=400)
         return error(400, "market and symbol are required")
     if not market_allowed(market):
         return error(403, f"Market not allowed: {market}", http=403)
     if not instrument_allowed(symbol):
         return error(403, f"Instrument not allowed: {symbol}", http=403)
+
+    if data_mode == "training_ohlc":
+        # Strict parser creates no client and makes no provider call, so
+        # authorization/parameter failures keep the provider-call count at 0.
+        from app.services.training_ohlc import (
+            TrainingIdentityError,
+            TrainingRequestError,
+            TrainingSourceError,
+            get_training_ohlc,
+            parse_training_request,
+        )
+        try:
+            parsed = parse_training_request(request.args, now_utc=_now_utc())
+        except TrainingRequestError:
+            return error(400, "training.invalidRequest",
+                         details={"reason": "training.invalidRequest"}, http=400)
+        try:
+            data = get_training_ohlc(
+                symbol=parsed["symbol"],
+                before_time=parsed["before_time"],
+                limit=parsed["limit"],
+            )
+        except TrainingRequestError:
+            return error(400, "training.invalidRequest",
+                         details={"reason": "training.invalidRequest"}, http=400)
+        except TrainingIdentityError:
+            return error(502, "training.identityUnverified",
+                         details={"reason": "training.identityUnverified"}, http=502)
+        except TrainingSourceError:
+            return error(502, "training.sourceUnavailable",
+                         details={"reason": "training.sourceUnavailable"}, http=502)
+        except Exception:
+            return error(502, "training.sourceUnavailable",
+                         details={"reason": "training.sourceUnavailable"}, http=502)
+        return envelope(data)
+
+    timeframe = (request.args.get("timeframe") or "1D").strip()
+    limit = clip_int(request.args.get("limit"), default=300, lo=1, hi=2000)
+    before_raw = request.args.get("before_time") or request.args.get("beforeTime")
 
     before_time = None
     if before_raw:

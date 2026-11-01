@@ -1,6 +1,7 @@
 """Cryptocurrency market data backed by native exchange REST APIs."""
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta, timezone
+import math
 import os
 import threading
 import time
@@ -8,6 +9,8 @@ import time
 from app.data_sources.base import BaseDataSource, TIMEFRAME_SECONDS
 from app.data_sources.errors import MarketDataFailure, classify_market_data_failure
 from app.data_sources.native_crypto import (
+    GATE_SWAP_VOLUME_ERROR_CODES,
+    NativeCryptoAPIError,
     SUPPORTED_EXCHANGES,
     create_native_crypto_client,
     normalize_exchange_id,
@@ -48,6 +51,16 @@ def _is_symbol_not_found_error(exc: Any) -> bool:
             "market does not exist",
             "trading pair not found",
         )
+    )
+
+
+def _is_gate_swap_volume_error(exc: Any, exchange: Any) -> bool:
+    """Identify only the five deterministic unit failures on Gate swaps."""
+    return (
+        getattr(exchange, "id", "") == "gate"
+        and getattr(exchange, "market_type", "") == "swap"
+        and isinstance(exc, NativeCryptoAPIError)
+        and str(exc).split(":", 1)[0] in GATE_SWAP_VOLUME_ERROR_CODES
     )
 
 
@@ -601,6 +614,14 @@ class CryptoDataSource(BaseDataSource):
                 logger.warning(f"Exchange public API returned no K-lines: {symbol_pair}")
                 raise _PublicKlineUnavailable
 
+            gate_swap = (
+                current_exchange == "gate"
+                and getattr(self.exchange, "market_type", "") == "swap"
+            )
+            if gate_swap and resample_bucket > 1:
+                raise NativeCryptoAPIError(
+                    "gate.swapVolumeEvidenceMissing: resampled volume has no native bar evidence"
+                )
             if resample_bucket > 1:
                 ohlcv = self._resample_ohlcv(ohlcv, resample_bucket)
                 if not ohlcv:
@@ -612,15 +633,72 @@ class CryptoDataSource(BaseDataSource):
 
             for candle in ohlcv:
                 if len(candle) < 6:
+                    if gate_swap:
+                        raise NativeCryptoAPIError("gate.swapVolumeEvidenceMissing: incomplete OHLCV row")
                     continue
-                klines.append(self.format_kline(
+                kline = self.format_kline(
                     timestamp=int(candle[0] / 1000),  # 毫秒转秒
                     open_price=candle[1],
                     high=candle[2],
                     low=candle[3],
                     close=candle[4],
                     volume=candle[5],
-                ))
+                )
+                if gate_swap:
+                    evidence_reader = getattr(self.exchange, "get_gate_swap_volume_evidence", None)
+                    evidence = (
+                        evidence_reader(symbol_pair, fetch_exchange_timeframe, int(candle[0]))
+                        if callable(evidence_reader) else None
+                    )
+                    evidence_fields = (
+                        "exchange_id", "market_type", "settle", "native_contract", "bar_open_utc",
+                        "interval", "raw_v_contracts", "raw_quote_sum", "quanto_multiplier",
+                        "base_volume", "quote_volume", "volume_unit", "source_endpoint",
+                        "retrieved_at_utc", "metadata_source", "metadata_retrieved_at_utc",
+                        "effective_from", "effective_to", "historical_applicability",
+                        "normalization_version",
+                    )
+                    bar_open_utc = datetime.fromtimestamp(
+                        candle[0] / 1000, timezone.utc
+                    ).isoformat().replace("+00:00", "Z")
+                    if (
+                        not isinstance(evidence, dict)
+                        or any(field not in evidence for field in evidence_fields)
+                        or evidence["exchange_id"] != "gate"
+                        or evidence["market_type"] != "swap"
+                        or evidence["settle"] != "USDT"
+                        or evidence["native_contract"] != self.exchange._native_symbol(symbol_pair)
+                        or evidence["bar_open_utc"] != bar_open_utc
+                        or evidence["interval"] != fetch_exchange_timeframe
+                        or evidence["volume_unit"] != "base"
+                        or evidence["normalization_version"] != "gate_swap_base_v1"
+                    ):
+                        raise NativeCryptoAPIError(
+                            "gate.swapVolumeEvidenceMissing: absent or mismatched native bar evidence"
+                        )
+                    if evidence["historical_applicability"] != "verified":
+                        raise NativeCryptoAPIError(
+                            "gate.swapVolumeHistoricalUnverified: native bar applicability is unknown"
+                        )
+                    if (
+                        not math.isfinite(candle[5]) or candle[5] <= 0
+                        or evidence["base_volume"] != candle[5]
+                    ):
+                        raise NativeCryptoAPIError(
+                            "gate.swapVolumeInvalid: normalized volume must match positive native volume"
+                        )
+                    # Native already converted once; bypass format_kline's two-decimal rounding.
+                    kline.update(
+                        volume=candle[5],
+                        raw_v_contracts=float(evidence["raw_v_contracts"]),
+                        quanto_multiplier=float(evidence["quanto_multiplier"]),
+                        quote_volume=evidence["quote_volume"],
+                        volume_unit=evidence["volume_unit"],
+                        volume_normalization_version=evidence["normalization_version"],
+                        volume_historical_applicability=evidence["historical_applicability"],
+                        volume_evidence={field: evidence[field] for field in evidence_fields},
+                    )
+                klines.append(kline)
             
             klines = self.filter_and_limit(
                 klines,
@@ -689,6 +767,8 @@ class CryptoDataSource(BaseDataSource):
                     timeframe=timeframe,
                 )
         except Exception as e:
+            if _is_gate_swap_volume_error(e, self.exchange):
+                raise
             self._set_last_failure(e, symbol=symbol_pair or symbol, timeframe=timeframe)
             logger.error(f"Failed to fetch crypto K-lines {symbol}: {str(e)}")
             import traceback
@@ -889,6 +969,8 @@ class CryptoDataSource(BaseDataSource):
                             )
                             break
                         except Exception as exc:
+                            if _is_gate_swap_volume_error(exc, self.exchange):
+                                raise
                             last_err = exc
                             if attempt < retry_per_batch:
                                 # Brief back-off (0.5s, 1.5s) tolerates short rate-limit / network blips
@@ -964,6 +1046,8 @@ class CryptoDataSource(BaseDataSource):
             return ohlcv
 
         except Exception as e:
+            if _is_gate_swap_volume_error(e, self.exchange):
+                raise
             if _is_symbol_not_found_error(e):
                 self._mark_invalid_symbol(symbol_pair, e)
                 self._set_last_failure(e, symbol=symbol_pair, timeframe=timeframe)
@@ -1038,6 +1122,8 @@ class CryptoDataSource(BaseDataSource):
             if ohlcv:
                 return ohlcv
         except Exception as e:
+            if _is_gate_swap_volume_error(e, self.exchange):
+                raise
             if _is_symbol_not_found_error(e):
                 self._mark_invalid_symbol(symbol_pair, e)
                 self._set_last_failure(e, symbol=symbol_pair, timeframe=timeframe)
@@ -1060,6 +1146,8 @@ class CryptoDataSource(BaseDataSource):
                 )
                 return recent
         except Exception as e:
+            if _is_gate_swap_volume_error(e, self.exchange):
+                raise
             if _is_symbol_not_found_error(e):
                 self._mark_invalid_symbol(symbol_pair, e)
             else:

@@ -280,3 +280,62 @@ def test_installed_prompt_skill_is_always_non_executable(tmp_path, monkeypatch):
     installed = next(item for item in list_skills("en-US") if item["id"] == "safe_prompt")
     assert installed["action_type"] == "prompt"
     assert render_prompt_template(ai_skill_registry.get_skill("safe_prompt"), "en-US", {"symbol": "SPY"}) == "Review SPY"
+
+
+def _klines_operation() -> dict:
+    agent_paths = json.loads(
+        (BACKEND_ROOT / "docs" / "agent" / "agent-openapi.json").read_text(encoding="utf-8")
+    )["paths"]
+    return agent_paths["/api/agent/v1/klines"]["get"]
+
+
+def test_klines_openapi_documents_training_ohlc_contract():
+    operation = _klines_operation()
+    parameter_names = {parameter["name"] for parameter in operation["parameters"]}
+    assert {"market", "symbol", "timeframe", "limit", "before_time",
+            "data_mode", "exchange_id", "market_type"} <= parameter_names
+    constraints = operation.get("x-training-ohlc-constraints")
+    assert constraints, "training constraints extension missing"
+    assert constraints["required_exchange_id"] == "gate"
+    assert constraints["required_market_type"] == "swap"
+    assert constraints["required_market"] == "Crypto"
+    assert constraints["required_timeframe"] == "1D"
+    assert constraints["before_time"]["must_be_utc_midnight"] is True
+    assert constraints["before_time"]["exclusive_with"] == "beforeTime"
+    assert constraints["limit"]["default"] == 365
+    assert constraints["limit"]["minimum"] == 2
+    assert constraints["limit"]["maximum"] == 365
+    assert constraints["limit"]["legacy_default_unchanged"] == 300
+    response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    one_of = response_schema["oneOf"]
+    refs = {entry["$ref"].rsplit("/", 1)[-1] for entry in one_of}
+    assert refs == {"AgentLegacyKlinesData", "GridTrainingOhlcData"}
+    errors = {str(code) for code in operation["responses"]}
+    assert {"400", "401", "403", "502"} <= errors
+    schemas = json.loads(
+        (BACKEND_ROOT / "docs" / "agent" / "agent-openapi.json").read_text(encoding="utf-8")
+    )["components"]["schemas"]
+    training = schemas["GridTrainingOhlcData"]
+    assert training["properties"]["data_mode"]["enum"] == ["training_ohlc"]
+    assert training["properties"]["synthetic"]["enum"] == [False]
+    assert training["properties"]["volume_status"]["enum"] == ["not_provided"]
+    assert training["properties"]["backtest_eligible"]["enum"] == [False]
+    assert training["properties"]["historical_volume_validity"]["enum"] == ["UNKNOWN"]
+    legacy = schemas["AgentLegacyKlinesData"]
+    assert {"market", "symbol", "timeframe", "count", "klines"} <= set(legacy["properties"])
+
+
+def test_klines_route_source_declares_training_dispatch_and_scope_r():
+    source = (
+        BACKEND_ROOT / "backend_api_python" / "app" / "routes" / "agent_v1" / "markets.py"
+    ).read_text(encoding="utf-8")
+    assert 'data_mode not in ("ohlcv", "training_ohlc")' in source
+    assert "training.invalidRequest" in source
+    assert "training.sourceUnavailable" in source
+    assert "training.identityUnverified" in source
+    # Authorization stays ahead of any provider call in both modes.
+    auth_index = source.index("if not market_allowed(market):")
+    training_index = source.index("if data_mode == \"training_ohlc\":")
+    legacy_index = source.index("_kline_service.get_kline(")
+    assert auth_index < training_index < legacy_index
+    assert "@agent_required(SCOPE_R)" in source

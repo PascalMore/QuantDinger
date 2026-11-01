@@ -194,6 +194,72 @@
           "param_schema": { "type": "object" },
           "metadata":     { "type": "object" }
         }
+      },
+      "AgentLegacyKlinesData": {
+        "type": "object",
+        "description": "Legacy OHLCV envelope (data_mode omitted or ohlcv).",
+        "required": ["market", "symbol", "timeframe", "count", "klines"],
+        "properties": {
+          "market":    { "type": "string" },
+          "symbol":    { "type": "string" },
+          "timeframe": { "type": "string", "default": "1D" },
+          "count":     { "type": "integer", "minimum": 0 },
+          "klines":    { "type": "array", "items": { "type": "array", "items": {} } }
+        }
+      },
+      "GridTrainingOhlcIdentity": {
+        "type": "object",
+        "required": ["exchange_id", "market_type", "settle", "contract_type", "canonical_symbol", "native_contract"],
+        "properties": {
+          "exchange_id":     { "type": "string", "enum": ["gate"] },
+          "market_type":     { "type": "string", "enum": ["swap"] },
+          "settle":          { "type": "string", "enum": ["USDT"] },
+          "contract_type":   { "type": "string", "enum": ["direct"] },
+          "canonical_symbol": { "type": "string" },
+          "native_contract": { "type": "string" }
+        }
+      },
+      "GridTrainingOhlcKline": {
+        "type": "object",
+        "description": "Price-only normalized daily bar; no volume fields by contract.",
+        "required": ["open_time_utc", "close_time_utc", "available_at_utc", "availability_basis", "observed_at_utc", "open", "high", "low", "close", "identity"],
+        "properties": {
+          "open_time_utc":       { "type": "string", "format": "date-time" },
+          "close_time_utc":      { "type": "string", "format": "date-time" },
+          "available_at_utc":    { "type": "string", "format": "date-time" },
+          "availability_basis":  { "type": "string", "enum": ["bar_close_boundary"] },
+          "observed_at_utc":     { "type": "string", "format": "date-time" },
+          "open":   { "type": "number", "exclusiveMinimum": 0 },
+          "high":   { "type": "number", "exclusiveMinimum": 0 },
+          "low":    { "type": "number", "exclusiveMinimum": 0 },
+          "close":  { "type": "number", "exclusiveMinimum": 0 },
+          "identity": { "$ref": "#/components/schemas/GridTrainingOhlcIdentity" }
+        }
+      },
+      "GridTrainingOhlcData": {
+        "type": "object",
+        "description": "Training-OHLC envelope (data_mode=training_ohlc). Price capability never upgrades volume eligibility.",
+        "required": ["schema_version", "data_mode", "status", "reason", "market", "symbol", "timeframe", "count", "identity", "identity_evidence", "source", "klines", "normalized_sha256", "coverage", "synthetic", "volume_status", "backtest_eligible", "historical_volume_validity"],
+        "properties": {
+          "schema_version": { "type": "string", "enum": ["grid_training_ohlc_v1"] },
+          "data_mode":      { "type": "string", "enum": ["training_ohlc"] },
+          "status":         { "type": "string", "enum": ["ok", "insufficient_evidence"] },
+          "reason":         { "type": "string", "nullable": true },
+          "market":         { "type": "string", "enum": ["Crypto"] },
+          "symbol":         { "type": "string" },
+          "timeframe":      { "type": "string", "enum": ["1D"] },
+          "count":          { "type": "integer", "minimum": 0 },
+          "identity":         { "$ref": "#/components/schemas/GridTrainingOhlcIdentity" },
+          "identity_evidence": { "type": "object" },
+          "source":           { "type": "object" },
+          "klines":           { "type": "array", "items": { "$ref": "#/components/schemas/GridTrainingOhlcKline" } },
+          "normalized_sha256": { "type": "string" },
+          "coverage":         { "type": "object" },
+          "synthetic":       { "type": "boolean", "enum": [false] },
+          "volume_status":   { "type": "string", "enum": ["not_provided"] },
+          "backtest_eligible": { "type": "boolean", "enum": [false] },
+          "historical_volume_validity": { "type": "string", "enum": ["UNKNOWN"] }
+        }
       }
     }
   },
@@ -234,16 +300,51 @@
     },
     "/api/agent/v1/klines": {
       "get": {
-        "summary": "OHLCV bars",
+        "summary": "OHLCV bars (legacy) or training OHLC bars",
+        "description": "data_mode omitted or =ohlcv keeps the legacy OHLCV behavior exactly. data_mode=training_ohlc returns price-only Gate USDT direct swap daily bars (no volume fields, synthetic=false, backtest_eligible=false) for pre-submission parameter freezing.",
         "x-scope-class": "R",
         "parameters": [
           { "in": "query", "name": "market",      "required": true,  "schema": { "type": "string" } },
           { "in": "query", "name": "symbol",      "required": true,  "schema": { "type": "string" } },
           { "in": "query", "name": "timeframe",   "required": false, "schema": { "type": "string", "default": "1D" } },
-          { "in": "query", "name": "limit",       "required": false, "schema": { "type": "integer", "default": 300, "maximum": 2000 } },
-          { "in": "query", "name": "before_time", "required": false, "schema": { "type": "integer", "description": "unix seconds" } }
+          { "in": "query", "name": "limit",       "required": false, "description": "Legacy default 300 clamped to 1..2000; training_ohlc requires a strict integer 2..365 (default 365, never clamped).", "schema": { "type": "integer", "default": 300, "maximum": 2000 } },
+          { "in": "query", "name": "before_time", "required": false, "schema": { "type": "integer", "description": "unix seconds" } },
+          { "in": "query", "name": "data_mode",     "required": false, "schema": { "type": "string", "enum": ["ohlcv", "training_ohlc"], "default": "ohlcv" } },
+          { "in": "query", "name": "exchange_id",   "required": false, "description": "training_ohlc only; must be gate.", "schema": { "type": "string", "enum": ["gate"] } },
+          { "in": "query", "name": "market_type",   "required": false, "description": "training_ohlc only; must be swap.", "schema": { "type": "string", "enum": ["swap"] } }
         ],
-        "responses": { "200": { "description": "OK" } }
+        "x-training-ohlc-constraints": {
+          "required_market": "Crypto",
+          "required_timeframe": "1D",
+          "required_exchange_id": "gate",
+          "required_market_type": "swap",
+          "before_time": {
+            "required": true,
+            "must_be_utc_midnight": true,
+            "must_not_be_future": true,
+            "exclusive_with": "beforeTime"
+          },
+          "limit": {
+            "default": 365,
+            "minimum": 2,
+            "maximum": 365,
+            "strict_no_clamping": true,
+            "legacy_default_unchanged": 300
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK; training success still carries data.status so HTTP 200 alone is not acceptance.",
+            "content": { "application/json": { "schema": { "oneOf": [
+              { "$ref": "#/components/schemas/AgentLegacyKlinesData" },
+              { "$ref": "#/components/schemas/GridTrainingOhlcData" }
+            ] } } }
+          },
+          "400": { "description": "Invalid request (training.invalidRequest; provider calls = 0)" },
+          "401": { "description": "Missing or unknown agent token" },
+          "403": { "description": "Market not in token allowlist / instrument denied / scope missing" },
+          "502": { "description": "Provider source failure (training.sourceUnavailable) or unverified identity (training.identityUnverified); data = null" }
+        }
       }
     },
     "/api/agent/v1/price": {
