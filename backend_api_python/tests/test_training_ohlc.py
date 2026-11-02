@@ -190,6 +190,42 @@ def test_ohlcv_mode_rejects_training_identity_params():
             now_utc=datetime(2026, 11, 1, tzinfo=UTC))
 
 
+@pytest.mark.parametrize("bad", ["0", "000", "99999999999999999", "²"])
+def test_parse_zero_huge_or_unicode_digit_before_time_is_request_error(bad):
+    """F-02: string conversion is followed by a uniform >0 check and int/date
+    conversion/overflow failures normalize to TrainingRequestError, not raw
+    OSError/ValueError that would escape the route's parse branch."""
+    with pytest.raises(TrainingRequestError):
+        parse_training_request(
+            {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
+             "timeframe": "1D", "exchange_id": "gate", "market_type": "swap",
+             "before_time": bad},
+            now_utc=datetime(2026, 10, 31, tzinfo=UTC))
+
+
+@pytest.mark.parametrize("bad", ["0", "99999999999999999", "²"])
+def test_parse_zero_huge_or_unicode_digit_limit_is_request_error(bad):
+    with pytest.raises(TrainingRequestError):
+        parse_training_request(
+            {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
+             "timeframe": "1D", "exchange_id": "gate", "market_type": "swap",
+             "before_time": str(CUTOFF), "limit": bad},
+            now_utc=datetime(2026, 11, 1, tzinfo=UTC))
+
+
+def test_parse_timeframe_only_missing_defaults_to_1d():
+    """F-04: default 1D applies only when the parameter is absent (None);
+    an explicit empty value must not silently clamp to the default."""
+    base = {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
+            "exchange_id": "gate", "market_type": "swap", "before_time": str(CUTOFF)}
+    parsed = parse_training_request(base, now_utc=datetime(2026, 11, 1, tzinfo=UTC))
+    assert parsed["timeframe"] == "1D"
+    for empty in ("", "  "):
+        with pytest.raises(TrainingRequestError):
+            parse_training_request({**base, "timeframe": empty},
+                                   now_utc=datetime(2026, 11, 1, tzinfo=UTC))
+
+
 # --------------------------------------------------------------- native entry
 
 
@@ -240,7 +276,13 @@ def test_native_fetch_training_ohlc_sends_two_bounded_gets(monkeypatch):
 
 
 @pytest.mark.parametrize("base", ["PUMP", "AAVE", "JUP", "SUI"])
-def test_same_gate_fixture_training_isolated_from_legacy_unverified_volume(base, monkeypatch):
+def test_same_gate_fixture_training_isolated_from_legacy_public_volume(base, monkeypatch):
+    """D-01: training stays volume-free while the public entry becomes readable.
+
+    The public Gate entry now converts the same fixture once and reports its
+    historical applicability honestly as unknown; the training channel keeps
+    its price-only, backtest-ineligible contract.
+    """
     from app.data_sources.crypto import CryptoDataSource
     from app.services import training_ohlc as service
     from app.services.kline import KlineService
@@ -286,11 +328,19 @@ def test_same_gate_fixture_training_isolated_from_legacy_unverified_volume(base,
             guard.assert_not_called()
         assert len(calls) == 2
         # The exact same rows and current metadata enter the old public entry.
-        # No private synthetic metadata argument is supplied by production.
+        # No private synthetic metadata argument is supplied by production, so
+        # the public path converts units once and stays historically unknown.
         native.markets = {f"{base}/USDT:USDT": {
             "id": f"{base}_USDT", "settle": "USDT", "quote": "USDT", "info": metadata}}
-        with pytest.raises(NativeCryptoAPIError, match="gate.swapVolumeHistoricalUnverified"):
-            native.fetch_ohlcv(f"{base}/USDT:USDT", "1d", limit=365)
+        public_rows = native.fetch_ohlcv(f"{base}/USDT:USDT", "1d", limit=365)
+        assert public_rows
+        assert public_rows[0][5] == pytest.approx(12.345, rel=1e-12, abs=0)
+        public_evidence = native.get_gate_swap_volume_evidence(
+            f"{base}/USDT:USDT", "1d", public_rows[0][0]
+        )
+        assert public_evidence is not None
+        assert public_evidence["historical_applicability"] == "unknown"
+        assert public_evidence["metadata_source"] != "synthetic"
         parser.assert_called_once()
         assert parser.call_args.args[0] is rows
         assert "metadata" not in parser.call_args.kwargs
@@ -348,6 +398,52 @@ def test_native_rejects_non_2xx_and_non_list_payload(monkeypatch):
     _patch_transport(monkeypatch, client, calls, rows={"not": "a list"})
     with pytest.raises(NativeCryptoAPIError, match="sourceUnavailable"):
         client.fetch_training_ohlc("PUMPUSDT", before_time=CUTOFF)
+
+
+def _patch_training_payload_transport(monkeypatch, client, calls, *, status, body):
+    """F-03: real in-memory requests.Response objects with explicit status."""
+    import requests
+
+    def fake_get(url, params=None, **kwargs):
+        calls.append((url, dict(params or {})))
+        response = requests.Response()
+        response.status_code = status
+        response._content = body
+        return response
+
+    monkeypatch.setattr(client, "_http_session",
+                        lambda: type("S", (), {"get": staticmethod(fake_get)})())
+    monkeypatch.setattr(client, "_throttle", lambda: None)
+
+
+def test_training_payload_accepts_2xx_and_rejects_any_non_2xx(monkeypatch):
+    """F-03: a real Response with 200 passes; 302 with valid JSON and 503 are
+    rejected by an explicit 2xx check (raise_for_status alone is insufficient),
+    keeping allow_redirects=False and one attempt with no retry/redirect."""
+    import json as _json
+
+    client = NativeCryptoPublicClient("gate", "swap")
+    calls: list = []
+    _patch_training_payload_transport(
+        monkeypatch, client, calls,
+        status=200, body=_json.dumps([{"name": "PUMP_USDT", "type": "direct",
+                                       "base": "PUMP", "quote": "USDT",
+                                       "settle": "USDT"}]).encode("utf-8"))
+    contracts = client._get_training_payload(
+        "https://api.gateio.ws/api/v4/futures/usdt/contracts")
+    assert contracts == [{"name": "PUMP_USDT", "type": "direct", "base": "PUMP",
+                          "quote": "USDT", "settle": "USDT"}]
+
+    for status in (302, 503):
+        redirect = NativeCryptoPublicClient("gate", "swap")
+        redirect_calls: list = []
+        _patch_training_payload_transport(
+            monkeypatch, redirect, redirect_calls,
+            status=status, body=b"[]")
+        with pytest.raises(NativeCryptoAPIError, match="training.sourceUnavailable"):
+            redirect._get_training_payload(
+                "https://api.gateio.ws/api/v4/futures/usdt/candlesticks")
+        assert len(redirect_calls) == 1  # single bounded attempt, no retry
 
 
 # --------------------------------------------------------------- normalization
@@ -480,6 +576,31 @@ def test_normalize_nonfinite_number_payload_is_structural_error():
         {"t": CUTOFF - 3 * 86400, "o": float("nan"), "h": "10", "l": "9", "c": "9.5"}]
     with pytest.raises(TrainingSourceError):
         normalize_training_payload(payload, _request(3), observed_at_utc=OBSERVED)
+
+
+@pytest.mark.parametrize("bad_t", [
+    None, "1761849600", False, 1761849600.5, ["1761849600"],
+])
+def test_normalize_non_integer_t_is_source_error_not_request_error(bad_t):
+    """F-05: upstream bar.t structure is a provider fault -> TrainingSourceError
+    (mapped to 502 training.sourceUnavailable), never TrainingRequestError.
+    Valid integer t keeps passing; illegal prices keep the existing
+    200 insufficient_evidence outcome."""
+    payload = _payload(365)
+    rows = _raw_rows(365)
+    rows[10]["t"] = bad_t
+    payload["raw_rows"] = rows
+    with pytest.raises(TrainingSourceError):
+        normalize_training_payload(payload, _request(), observed_at_utc=OBSERVED)
+
+    legal = _full(365)
+    assert legal["status"] == "ok" and legal["count"] == 365
+    tampered = _payload(365)
+    price_rows = _raw_rows(365)
+    price_rows[10]["c"] = "NaN"  # illegal price string stays evidence-safe
+    tampered["raw_rows"] = price_rows
+    data = normalize_training_payload(tampered, _request(), observed_at_utc=OBSERVED)
+    assert data["status"] == "insufficient_evidence" and data["count"] < 365
 
 
 def test_normalize_missing_identity_fields_raise_identity_error():

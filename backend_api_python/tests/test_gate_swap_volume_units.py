@@ -154,7 +154,7 @@ def test_gate_native_to_consumer_preserves_units_projection_and_small_volume(
     ({"exchange_id": "binance"}, "EvidenceMissing"),
     ({"market_type": "spot"}, "EvidenceMissing"),
     ({"settle": "BTC"}, "EvidenceMissing"),
-    ({"historical_applicability": "unknown"}, "HistoricalUnverified"),
+    ({"historical_applicability": "bogus"}, "HistoricalUnverified"),
     ({"base_volume": 100}, "Invalid"),
 ])
 def test_gate_consumer_rejects_wrong_or_unknown_evidence(changes, code, monkeypatch):
@@ -192,11 +192,17 @@ def test_gate_consumer_rejects_missing_evidence_fields(monkeypatch):
         source.get_kline("BTC/USDT:USDT", "15m", 1)
 
 
-def test_gate_consumer_refuses_resampling_without_full_bar_evidence(monkeypatch):
+def test_gate_consumer_resampling_is_not_blocked_by_the_research_gate(monkeypatch):
+    """D-01: local resampling is no longer refused for missing per-bar evidence.
+
+    The synthetic fixture holds a single 15m bar, so a 4H bucket cannot be
+    filled; the request then yields no rows instead of the retired
+    ``gate.swapVolumeEvidenceMissing`` refusal.
+    """
     source, native = _gate_source(monkeypatch)
     native.timeframes = {"1h": "1h"}
-    with pytest.raises(NativeCryptoAPIError, match="gate.swapVolumeEvidenceMissing"):
-        source.get_kline("BTC/USDT:USDT", "4H", 1)
+    rows = source.get_kline("BTC/USDT:USDT", "4H", 1)
+    assert rows == []
 
 
 @pytest.mark.parametrize("recent", [False, True])
@@ -212,3 +218,141 @@ def test_gate_fallback_catches_also_propagate_unit_errors(code, recent, monkeypa
         source._fetch_ohlcv_fallback("BTC/USDT:USDT", "15m", 1, None, "15m")
     assert caught.value is error
     assert fetch.call_count == (2 if recent else 1)
+
+
+# --------------------------------------------------------------------------
+# D-01 rollback: real-shaped CURRENT Gate metadata must work end to end with
+# no parser injection. Only the HTTP boundary is faked; load_markets runs for
+# real (via _fetch_market_rows) so the snapshot and its retrieval timestamp
+# are the production ones.
+# --------------------------------------------------------------------------
+
+CURRENT_METADATA_SOURCE = "load_markets:/api/v4/futures/usdt/contracts"
+DAILY_BAR_T = 1699920000  # 2023-11-14T00:00:00Z
+
+
+def _gate_current_source(monkeypatch, contract="BTC_USDT", multiplier="0.01", candles=None):
+    """Build the real native->consumer path with a fake transport only."""
+    native = NativeCryptoPublicClient("gate", "swap")
+    market_row = {
+        "id": contract, "base": contract.split("_")[0], "quote": "USDT",
+        "settle": "USDT",
+        "info": {"name": contract, "type": "direct", "quanto_multiplier": multiplier},
+    }
+    candle_calls = []
+    if candles is None:
+        candles = [{"t": 1700000000, "o": "100", "h": "110", "l": "90", "c": "105",
+                    "v": "100", "sum": "123.4500"}]
+
+    def get(url, params=None):
+        assert url.endswith("/api/v4/futures/usdt/candlesticks")
+        candle_calls.append(dict(params or {}))
+        return candles
+
+    monkeypatch.setattr(native, "_fetch_market_rows", lambda: [market_row])
+    monkeypatch.setattr(native, "_get", get)
+    source = object.__new__(CryptoDataSource)
+    source.exchange = native
+    source._allow_public_fallback = True
+    source._preferred_public_exchange_id = ""
+    source._scoped_exchange_id = "gate"
+    source._scoped_market_type = "swap"
+    source._symbol_for_scoped_market = lambda symbol: symbol
+    source._is_invalid_symbol_cached = lambda _symbol: False
+    source.log_result = lambda *_args: None
+    fallback = Mock(side_effect=AssertionError("unit errors must not fall back"))
+    monkeypatch.setattr(CryptoDataSource, "for_exchange", fallback)
+    return source, native, candle_calls
+
+
+def test_gate_real_current_metadata_latest_page_native(monkeypatch):
+    source, native, candle_calls = _gate_current_source(monkeypatch)
+    rows = native.fetch_ohlcv("BTC/USDT:USDT", "15m", limit=1)
+    assert rows == [[1700000000000, 100.0, 110.0, 90.0, 105.0, 1.0]]
+    assert candle_calls == [{"interval": "15m", "limit": 1, "contract": "BTC_USDT"}]
+    evidence = native.get_gate_swap_volume_evidence("BTC/USDT:USDT", "15m", rows[0][0])
+    # A current snapshot converts units correctly but is not historical
+    # applicability evidence, so it must stay honestly unknown.
+    assert evidence["historical_applicability"] == "unknown"
+    assert evidence["metadata_source"] == CURRENT_METADATA_SOURCE
+    assert evidence["metadata_retrieved_at_utc"]
+    assert evidence["effective_from"] is None
+    assert evidence["effective_to"] is None
+    assert evidence["raw_v_contracts"] == "100"
+    assert evidence["base_volume"] == pytest.approx(1.0, rel=1e-12, abs=0)
+
+
+def test_gate_real_current_metadata_latest_page_consumer(monkeypatch):
+    source, native, candle_calls = _gate_current_source(monkeypatch)
+    rows = source.get_kline("BTC/USDT:USDT", "15m", 1)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["volume"] == pytest.approx(1.0, rel=1e-12, abs=0)
+    assert row["volume_unit"] == "base"
+    assert row["volume_normalization_version"] == "gate_swap_base_v1"
+    assert row["volume_historical_applicability"] == "unknown"
+    evidence = row["volume_evidence"]
+    assert evidence["historical_applicability"] == "unknown"
+    assert evidence["metadata_source"] == CURRENT_METADATA_SOURCE
+    assert set(evidence) == {
+        "exchange_id", "market_type", "settle", "native_contract", "bar_open_utc",
+        "interval", "raw_v_contracts", "raw_quote_sum", "quanto_multiplier",
+        "base_volume", "quote_volume", "volume_unit", "source_endpoint",
+        "retrieved_at_utc", "metadata_source", "metadata_retrieved_at_utc",
+        "effective_from", "effective_to", "historical_applicability",
+        "normalization_version",
+    }
+
+
+def test_gate_real_current_metadata_historical_window_consumer(monkeypatch):
+    daily_bar = {"t": DAILY_BAR_T, "o": "100", "h": "110", "l": "90", "c": "105",
+                 "v": "100", "sum": "123.4500"}
+    source, native, candle_calls = _gate_current_source(
+        monkeypatch, candles=[daily_bar]
+    )
+    after = DAILY_BAR_T
+    before = DAILY_BAR_T + 86400
+    rows = source.get_kline(
+        "BTC/USDT:USDT", "1D", 1, before_time=before, after_time=after
+    )
+    assert [row["time"] for row in rows] == [DAILY_BAR_T]
+    assert rows[0]["volume_historical_applicability"] == "unknown"
+    assert rows[0]["volume_evidence"]["metadata_source"] == CURRENT_METADATA_SOURCE
+    assert candle_calls[0]["from"] == after
+    assert "limit" not in candle_calls[0]
+
+
+@pytest.mark.parametrize("first_volume,second_volume,multiplier,expected", [
+    ("100", "200", "0.01", 3.0),
+    ("0.000001", "0.000002", "0.001", 3e-9),
+])
+def test_gate_real_current_metadata_resampling_consumer(
+    first_volume, second_volume, multiplier, expected, monkeypatch
+):
+    two_2h_bars = [
+        {"t": 1700000000, "o": "100", "h": "110", "l": "90", "c": "105",
+         "v": first_volume, "sum": "123.4500"},
+        {"t": 1700007200, "o": "105", "h": "120", "l": "95", "c": "118",
+         "v": second_volume, "sum": "246.9000"},
+    ]
+    source, native, candle_calls = _gate_current_source(
+        monkeypatch, multiplier=multiplier, candles=two_2h_bars
+    )
+    native.timeframes = {"2h": "2h", "1h": "1h"}
+    rows = source.get_kline("BTC/USDT:USDT", "4H", 1)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["time"] == 1700000000
+    assert row["open"] == 100.0 and row["high"] == 120.0
+    assert row["low"] == 90.0 and row["close"] == 118.0
+    # Contracts are converted once, then aggregated exactly: no rounding, no
+    # second multiplication, small positive volumes survive.
+    assert row["volume"] == pytest.approx(expected, rel=1e-12, abs=0)
+    assert row["volume_unit"] == "base"
+    assert row["volume_normalization_version"] == "gate_swap_base_v1"
+    assert row["volume_historical_applicability"] == "unknown"
+    # Aggregate output carries no fabricated per-native-bar research evidence.
+    assert "volume_evidence" not in row
+    assert "raw_v_contracts" not in row
+    assert candle_calls[0]["interval"] == "2h"
+    assert candle_calls[0]["limit"] == 2

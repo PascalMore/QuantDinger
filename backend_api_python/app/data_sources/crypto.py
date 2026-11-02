@@ -618,10 +618,7 @@ class CryptoDataSource(BaseDataSource):
                 current_exchange == "gate"
                 and getattr(self.exchange, "market_type", "") == "swap"
             )
-            if gate_swap and resample_bucket > 1:
-                raise NativeCryptoAPIError(
-                    "gate.swapVolumeEvidenceMissing: resampled volume has no native bar evidence"
-                )
+            gate_swap_resampled = gate_swap and resample_bucket > 1
             if resample_bucket > 1:
                 ohlcv = self._resample_ohlcv(ohlcv, resample_bucket)
                 if not ohlcv:
@@ -644,7 +641,21 @@ class CryptoDataSource(BaseDataSource):
                     close=candle[4],
                     volume=candle[5],
                 )
-                if gate_swap:
+                if gate_swap_resampled:
+                    # Aggregated bars carry no native single-bar research
+                    # evidence, so none is projected; the already-normalized
+                    # base volume is summed exactly without re-multiplying.
+                    if not math.isfinite(candle[5]) or candle[5] <= 0:
+                        raise NativeCryptoAPIError(
+                            "gate.swapVolumeInvalid: normalized volume must match positive native volume"
+                        )
+                    kline.update(
+                        volume=candle[5],
+                        volume_unit="base",
+                        volume_normalization_version="gate_swap_base_v1",
+                        volume_historical_applicability="unknown",
+                    )
+                elif gate_swap:
                     evidence_reader = getattr(self.exchange, "get_gate_swap_volume_evidence", None)
                     evidence = (
                         evidence_reader(symbol_pair, fetch_exchange_timeframe, int(candle[0]))
@@ -676,7 +687,7 @@ class CryptoDataSource(BaseDataSource):
                         raise NativeCryptoAPIError(
                             "gate.swapVolumeEvidenceMissing: absent or mismatched native bar evidence"
                         )
-                    if evidence["historical_applicability"] != "verified":
+                    if evidence["historical_applicability"] not in {"verified", "unknown"}:
                         raise NativeCryptoAPIError(
                             "gate.swapVolumeHistoricalUnverified: native bar applicability is unknown"
                         )

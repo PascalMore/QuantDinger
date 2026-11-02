@@ -644,10 +644,14 @@ class NativeCryptoPublicClient:
             raise ValueError(f"Unsupported crypto exchange: {self.id}")
         lower_bound = int(since) if since is not None else 0
         unique = {int(row[0]): row for row in parsed if row and int(row[0]) >= lower_bound}
+        returned = sorted(unique.values(), key=lambda row: row[0])[:limit]
         if self.id == "gate" and self.market_type == "swap":
             state = self._gate_swap_state
-            state.bars = {stamp: item for stamp, item in state.bars.items() if stamp in unique}
-        return sorted(unique.values(), key=lambda row: row[0])
+            final_stamps = {int(row[0]) for row in returned}
+            state.bars = {
+                stamp: item for stamp, item in state.bars.items() if stamp in final_stamps
+            }
+        return returned
 
     def _gate_swap_contract_metadata(self, native_contract: str) -> Dict[str, Any]:
         """Return the Gate USDT-settled direct linear contract record, or raise.
@@ -757,26 +761,41 @@ class NativeCryptoPublicClient:
                 None if raw_quote_sum is None
                 else self._gate_swap_volume_number(raw_quote_sum, "sum")
             )
+            synthetic_metadata = metadata.get("synthetic") is True
             effective_from = metadata.get("effective_from")
             effective_to = metadata.get("effective_to")
-            try:
-                start = datetime.fromisoformat(str(effective_from).replace("Z", "+00:00"))
-                end = datetime.fromisoformat(str(effective_to).replace("Z", "+00:00"))
-                verified = (
-                    metadata.get("synthetic") is True
-                    and metadata.get("metadata_source") == "synthetic"
-                    and start.tzinfo is not None and end.tzinfo is not None
-                    and start.timestamp() * 1000 <= bar_open_utc
-                    and (bar_open_utc + _TIMEFRAME_SECONDS[timeframe] * 1000)
-                    <= end.timestamp() * 1000
-                )
-            except (TypeError, ValueError, OverflowError):
-                verified = False
-            if not verified:
-                raise NativeCryptoAPIError(
-                    f"gate.swapVolumeHistoricalUnverified: no applicable metadata for "
-                    f"{identity['native_contract']} {timeframe} at bar {bar_open_utc}"
-                )
+            if synthetic_metadata:
+                # Offline fixture seam: the synthetic interval must cover the
+                # whole bar before its applicability may be called verified.
+                try:
+                    start = datetime.fromisoformat(str(effective_from).replace("Z", "+00:00"))
+                    end = datetime.fromisoformat(str(effective_to).replace("Z", "+00:00"))
+                    verified = (
+                        metadata.get("metadata_source") == "synthetic"
+                        and start.tzinfo is not None and end.tzinfo is not None
+                        and start.timestamp() * 1000 <= bar_open_utc
+                        and (bar_open_utc + _TIMEFRAME_SECONDS[timeframe] * 1000)
+                        <= end.timestamp() * 1000
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    verified = False
+                if not verified:
+                    raise NativeCryptoAPIError(
+                        f"gate.swapVolumeHistoricalUnverified: no applicable metadata for "
+                        f"{identity['native_contract']} {timeframe} at bar {bar_open_utc}"
+                    )
+                applicability = "verified"
+                metadata_source = metadata["metadata_source"]
+                metadata_retrieved_at = metadata.get("metadata_retrieved_at_utc")
+            else:
+                # Current contract snapshot: the live multiplier converts the
+                # units correctly, but a retrieval-time snapshot proves nothing
+                # about historical applicability, so it stays honestly unknown.
+                applicability = "unknown"
+                metadata_source = "load_markets:/api/v4/futures/usdt/contracts"
+                metadata_retrieved_at = self._gate_swap_metadata_retrieved_at or None
+                effective_from = None
+                effective_to = None
             parsed.append([
                 bar_open_utc,
                 _float(row.get("o")),
@@ -803,11 +822,11 @@ class NativeCryptoPublicClient:
                 "source_endpoint": "https://api.gateio.ws/api/v4/futures/usdt/candlesticks",
                 "retrieved_at_utc": datetime.now(timezone.utc)
                     .isoformat().replace("+00:00", "Z"),
-                "metadata_source": metadata["metadata_source"],
-                "metadata_retrieved_at_utc": metadata.get("metadata_retrieved_at_utc"),
+                "metadata_source": metadata_source,
+                "metadata_retrieved_at_utc": metadata_retrieved_at,
                 "effective_from": effective_from,
                 "effective_to": effective_to,
-                "historical_applicability": "verified",
+                "historical_applicability": applicability,
                 "normalization_version": "gate_swap_base_v1",
             }
         state.identity = identity
@@ -886,7 +905,13 @@ class NativeCryptoPublicClient:
                 headers={"User-Agent": "QuantDinger/5 public-market"},
                 allow_redirects=False,
             )
-            response.raise_for_status()
+            # raise_for_status only covers 4xx/5xx; the frozen contract rejects
+            # every non-2xx outcome (e.g. a 302 carrying valid JSON).
+            if not 200 <= response.status_code < 300:
+                raise NativeCryptoAPIError(
+                    f"training.sourceUnavailable: unexpected HTTP status "
+                    f"{response.status_code}"
+                )
             return response.json()
         except NativeCryptoAPIError:
             raise

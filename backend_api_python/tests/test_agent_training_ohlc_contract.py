@@ -179,12 +179,30 @@ def test_scope_market_and_instrument_denials_stop_before_provider(client, monkey
     {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
      "timeframe": "4H", "exchange_id": "gate", "market_type": "swap",
      "before_time": CUTOFF},
+    # F-04: explicit empty timeframe must not clamp to the 1D default
+    {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
+     "timeframe": "", "exchange_id": "gate", "market_type": "swap",
+     "before_time": CUTOFF},
     {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
      "timeframe": "1D", "exchange_id": "gate", "market_type": "swap",
      "before_time": CUTOFF, "limit": "2.5"},
     {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
      "timeframe": "1D", "exchange_id": "gate", "market_type": "swap",
      "before_time": CUTOFF, "limit": "366"},
+    # F-02: zero / huge / unicode-digit cursors are input errors at the parse
+    # stage, so the provider stays untouched.
+    {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
+     "timeframe": "1D", "exchange_id": "gate", "market_type": "swap",
+     "before_time": "0"},
+    {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
+     "timeframe": "1D", "exchange_id": "gate", "market_type": "swap",
+     "before_time": "000"},
+    {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
+     "timeframe": "1D", "exchange_id": "gate", "market_type": "swap",
+     "before_time": "99999999999999999"},
+    {"data_mode": "training_ohlc", "market": "Crypto", "symbol": "PUMPUSDT",
+     "timeframe": "1D", "exchange_id": "gate", "market_type": "swap",
+     "before_time": "²"},
     {"data_mode": "kline", "market": "Crypto", "symbol": "PUMPUSDT"},
 ])
 def test_invalid_training_requests_are_400_with_zero_provider_calls(client, provider_spy,
@@ -314,6 +332,65 @@ def test_provider_source_failure_maps_to_502_source_unavailable(
     body = response.get_json()
     assert body["message"] == "training.sourceUnavailable"
     assert body["data"] is None
+
+
+def test_upstream_non_integer_t_is_502_source_unavailable_via_real_chain(
+        client, provider_spy, monkeypatch):
+    """F-05: a provider payload whose raw bar.t lost its integer structure is a
+    source fault. The real route -> service -> Native -> normalize chain must
+    surface HTTP 502 / code 502 / training.sourceUnavailable / data null /
+    retriable false with controlled details; no payload or auth leakage."""
+    import json as _json
+
+    from app.data_sources import native_crypto as native_module
+    from app.services import training_ohlc as service
+
+    broken_rows = _rows(365)
+    broken_rows[10]["t"] = "1761849600"  # upstream string structure error
+
+    calls = {"count": 0}
+
+    class FakeResponse:
+        def __init__(self, status_code, content):
+            self.status_code = status_code
+            self._content = content
+
+        def json(self):
+            return _json.loads(self._content)
+
+    def fake_get(url, params=None, **kwargs):
+        calls["count"] += 1
+        assert kwargs.get("allow_redirects") is False
+        if url.endswith("/contracts"):
+            return FakeResponse(200, _json.dumps([
+                {"name": "PUMP_USDT", "type": "direct", "base": "PUMP",
+                 "quote": "USDT", "settle": "USDT"}]).encode("utf-8"))
+        assert url.endswith("/candlesticks")
+        return FakeResponse(200, _json.dumps(broken_rows).encode("utf-8"))
+
+    class FakeSession:
+        def get(self, url, params=None, **kwargs):
+            return fake_get(url, params=params, **kwargs)
+
+    real_client = native_module.NativeCryptoPublicClient("gate", "swap")
+    monkeypatch.setattr(real_client, "_http_session", lambda: FakeSession())
+    monkeypatch.setattr(real_client, "_throttle", lambda: None)
+    monkeypatch.setattr(service, "create_native_crypto_client",
+                        lambda *a, **k: real_client)
+    response = client.get(
+        "/api/agent/v1/klines",
+        headers=AUTH, query_string=_training_query(),
+    )
+    assert response.status_code == 502
+    body = response.get_json()
+    assert body == {"code": 502, "message": "training.sourceUnavailable",
+                    "details": {"reason": "training.sourceUnavailable"},
+                    "retriable": False, "data": None}
+    text = response.get_data(as_text=True)
+    for forbidden in ("1761849600", TOKEN, "Traceback", "raw_rows", "KeyError"):
+        assert forbidden not in text
+    assert calls["count"] == 2
+    assert provider_spy["fetch"] == 0  # fake service client bypassed entirely
 
 
 def test_insufficient_evidence_is_http_200_code_0_with_explicit_status(

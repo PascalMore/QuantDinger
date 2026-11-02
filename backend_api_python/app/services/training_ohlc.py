@@ -70,19 +70,28 @@ def _server_now_utc() -> datetime:
 
 
 def _strict_int(raw: Any, field: str) -> int:
-    """Parse a positive integer from a string/number, rejecting junk."""
+    """Parse a positive integer from a string/number, rejecting junk.
+
+    Conversion and datetime-range failures normalize to TrainingRequestError
+    (HTTP 400) so no raw ValueError/OSError escapes the route's parse branch.
+    """
     if isinstance(raw, bool) or raw is None or raw == "":
         raise TrainingRequestError(f"{field} must be a positive integer")
     if isinstance(raw, str):
         text = raw.strip()
         if not text.isdigit():
             raise TrainingRequestError(f"{field} must be a positive integer")
-        return int(text)
-    if isinstance(raw, int):
-        if raw <= 0:
-            raise TrainingRequestError(f"{field} must be a positive integer")
-        return raw
-    raise TrainingRequestError(f"{field} must be a positive integer")
+        try:
+            value = int(text)
+        except ValueError as exc:
+            raise TrainingRequestError(f"{field} must be a positive integer") from exc
+    elif isinstance(raw, int):
+        value = raw
+    else:
+        raise TrainingRequestError(f"{field} must be a positive integer")
+    if value <= 0:
+        raise TrainingRequestError(f"{field} must be a positive integer")
+    return value
 
 
 def parse_training_request(args: Mapping[str, Any], *, now_utc: datetime) -> dict:
@@ -145,7 +154,15 @@ def parse_training_request(args: Mapping[str, Any], *, now_utc: datetime) -> dic
     if not base or quote != "USDT":
         raise TrainingRequestError("symbol must be a USDT pair")
 
-    timeframe = (single("timeframe") or "1D").strip()
+    timeframe = single("timeframe")
+    if timeframe is None:
+        # Only a truly absent parameter falls back to the default; an explicit
+        # empty value stays an input error (Design §11.3: no empty clamping).
+        timeframe = "1D"
+    else:
+        timeframe = timeframe.strip()
+        if not timeframe:
+            raise TrainingRequestError("timeframe must not be empty")
     if timeframe != "1D":
         raise TrainingRequestError("training_ohlc requires timeframe=1D")
 
@@ -154,7 +171,10 @@ def parse_training_request(args: Mapping[str, Any], *, now_utc: datetime) -> dic
     if before_raw is not None and before_alias is not None:
         raise TrainingRequestError("before_time and beforeTime are mutually exclusive")
     before_value = _strict_int(before_raw or before_alias, "before_time")
-    cutoff = datetime.fromtimestamp(before_value, tz=timezone.utc)
+    try:
+        cutoff = datetime.fromtimestamp(before_value, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError) as exc:
+        raise TrainingRequestError("before_time must be a valid unix timestamp") from exc
     if cutoff > now_utc:
         raise TrainingRequestError("before_time must not be in the future")
     if before_value % DAY_SECONDS:
@@ -202,9 +222,10 @@ def _price(raw: Any, field: str) -> float:
 
 
 def _bar_time(raw: Any) -> int:
-    """t is Unix seconds; decimals/bools/missing default are rejected."""
+    """t is Unix seconds; a non-integer upstream value is a provider structure
+    failure (TrainingSourceError -> 502), not a caller request error."""
     if isinstance(raw, bool) or not isinstance(raw, int):
-        raise TrainingRequestError("bar t must be integer unix seconds")
+        raise TrainingSourceError("training.sourceUnavailable: bar t must be integer unix seconds")
     return raw
 
 

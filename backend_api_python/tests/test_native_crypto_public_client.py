@@ -202,16 +202,12 @@ def test_bitget_ticker_parses_change_rate_without_unbound_state(market_type, mon
     ("metadata", "error_code"),
     [
         ({"name": "BTC_USDT", "type": "direct"}, "gate.swapVolumeMetadataMissing"),
-        (
-            {"name": "BTC_USDT", "type": "direct", "quanto_multiplier": "0.01"},
-            "gate.swapVolumeHistoricalUnverified",
-        ),
     ],
 )
-def test_gate_swap_rejects_missing_multiplier_or_unverified_snapshot(
+def test_gate_swap_rejects_missing_multiplier(
     metadata, error_code, monkeypatch
 ):
-    """Synthetic current metadata is not historical applicability evidence."""
+    """A contract without a multiplier cannot be converted at all."""
     client = NativeCryptoPublicClient("gate", "swap")
     market = {
         "id": "BTC_USDT", "settle": "USDT", "quote": "USDT", "info": metadata,
@@ -228,6 +224,34 @@ def test_gate_swap_rejects_missing_multiplier_or_unverified_snapshot(
 
     with pytest.raises(NativeCryptoAPIError, match=error_code):
         client.fetch_ohlcv("BTC/USDT:USDT", "15m", since=1700000000000, limit=1)
+
+
+def test_gate_current_snapshot_converts_units_but_stays_unknown(monkeypatch):
+    """D-01: a live snapshot is usable, yet it is not historical evidence."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    market = {
+        "id": "BTC_USDT", "settle": "USDT", "quote": "USDT",
+        "info": {"name": "BTC_USDT", "type": "direct", "quanto_multiplier": "0.01"},
+    }
+    client.markets = {"BTC/USDT:USDT": market, "BTC/USDT": market}
+    monkeypatch.setattr(
+        client,
+        "_get",
+        lambda *_args, **_kwargs: [
+            {"t": 1700000000, "o": "100", "h": "110", "l": "90", "c": "105",
+             "v": "100", "sum": "123.45"},
+        ],
+    )
+
+    rows = client.fetch_ohlcv("BTC/USDT:USDT", "15m", since=1700000000000, limit=1)
+
+    assert rows == [[1700000000000, 100.0, 110.0, 90.0, 105.0, 1.0]]
+    evidence = client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000000000
+    )
+    assert evidence is not None
+    assert evidence["historical_applicability"] == "unknown"
+    assert evidence["metadata_source"] != "synthetic"
 
 
 def _synthetic_gate_metadata(contract="BTC_USDT", multiplier="0.01"):
@@ -356,7 +380,6 @@ def test_gate_invalid_sum_is_not_silently_zeroed(quote):
     {"effective_from": "2023-11-14T23:00:00Z"},
     {"effective_to": "2023-11-14T22:14:00Z"},
     {"effective_from": "2023-11-14T00:00:00"},
-    {"synthetic": False}, {"metadata_source": "current_snapshot"},
 ])
 def test_gate_synthetic_interval_must_cover_entire_bar(override):
     client = NativeCryptoPublicClient("gate", "swap")
@@ -368,15 +391,47 @@ def test_gate_synthetic_interval_must_cover_entire_bar(override):
         )
 
 
+@pytest.mark.parametrize("override", [
+    {"synthetic": False},
+])
+def test_gate_non_synthetic_metadata_is_current_not_verified(override):
+    """D-01: without the synthetic marker the snapshot stays honestly unknown."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    metadata = {**_synthetic_gate_metadata(), **override}
+    rows = client._parse_gate_swap_ohlcv(
+        [_gate_bar()], symbol="BTC/USDT:USDT", timeframe="15m", since_ms=None,
+        metadata=metadata,
+    )
+    assert rows == [[1700000000000, 100.0, 110.0, 90.0, 105.0, 1.0]]
+    evidence = client.get_gate_swap_volume_evidence("BTC/USDT:USDT", "15m", rows[0][0])
+    assert evidence is not None
+    assert evidence["historical_applicability"] == "unknown"
+
+
+def test_gate_synthetic_marker_with_foreign_source_stays_rejected():
+    """A synthetic marker paired with a non-synthetic source is inconsistent."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    metadata = {**_synthetic_gate_metadata(), "metadata_source": "current_snapshot"}
+    with pytest.raises(NativeCryptoAPIError, match="gate.swapVolumeHistoricalUnverified"):
+        client._parse_gate_swap_ohlcv(
+            [_gate_bar()], symbol="BTC/USDT:USDT", timeframe="15m", since_ms=None,
+            metadata=metadata,
+        )
+
+
 def test_gate_public_snapshot_does_not_import_synthetic_history_from_info(monkeypatch):
+    """A provider payload that mimics the fixture cannot become verified."""
     client = NativeCryptoPublicClient("gate", "swap")
     metadata = _synthetic_gate_metadata()
     market = {"id": "BTC_USDT", "settle": "USDT", "quote": "USDT", "info": metadata["info"]}
     market["info"].update(metadata)
     client.markets = {"BTC/USDT:USDT": market}
     monkeypatch.setattr(client, "_get", lambda *_args: [_gate_bar()])
-    with pytest.raises(NativeCryptoAPIError, match="gate.swapVolumeHistoricalUnverified"):
-        client.fetch_ohlcv("BTC/USDT:USDT", "15m", limit=1)
+    rows = client.fetch_ohlcv("BTC/USDT:USDT", "15m", limit=1)
+    assert rows == [[1700000000000, 100.0, 110.0, 90.0, 105.0, 1.0]]
+    evidence = client.get_gate_swap_volume_evidence("BTC/USDT:USDT", "15m", rows[0][0])
+    assert evidence is not None
+    assert evidence["historical_applicability"] == "unknown"
 
 
 @pytest.mark.parametrize("failure", ["network", "empty", "invalid", "timeframe", "symbol"])
@@ -531,3 +586,50 @@ def test_non_gate_swap_request_and_six_column_volume_regression(
         assert sent["size"] == cap
     else:
         assert sent["limit"] == cap
+
+
+def test_fetch_ohlcv_restores_final_limit_on_all_paths(monkeypatch):
+    """F-01: the public entry re-applies its ascending ``[:limit]`` count bound
+    on every venue/path (4111d45 contract: oldest-kept head slice, no tail
+    reinterpretation), and Gate evidence keeps only the finally returned bars."""
+    three_ms = [1700000000000, 1700000060000, 1700000120000]
+
+    # nonGate (binance spot): transport over-returns 3 bars, limit=1.
+    binance = NativeCryptoPublicClient("binance", "spot")
+    monkeypatch.setattr(
+        binance, "_get",
+        lambda *_a, **_k: [[ts, "100", "110", "90", "105", "12"] for ts in three_ms],
+    )
+    assert binance.fetch_ohlcv("BTC/USDT", "1m", limit=1) == [
+        [1700000000000, 100.0, 110.0, 90.0, 105.0, 12.0],
+    ]
+
+    # Gate spot: same over-return with the spot seven-column payload shape.
+    gate_spot = NativeCryptoPublicClient("gate", "spot")
+    monkeypatch.setattr(
+        gate_spot, "_get",
+        lambda *_a, **_k: [
+            [str(ts // 1000), "0", "109", "110", "90", "100", "16"] for ts in three_ms
+        ],
+    )
+    rows = gate_spot.fetch_ohlcv("BTC/USDT", "1m", limit=1)
+    assert len(rows) == 1
+    assert rows[0][0] == 1700000000000
+
+    # Private synthetic Gate swap seam (same fixture as the volume-unit tests).
+    gate_swap = NativeCryptoPublicClient("gate", "swap")
+    _install_synthetic_parser(gate_swap, monkeypatch)
+    monkeypatch.setattr(
+        gate_swap, "_get",
+        lambda *_a, **_k: [
+            _gate_bar(ts) for ts in (1700000000, 1700000900, 1700001800)
+        ],
+    )
+    rows = gate_swap.fetch_ohlcv("BTC/USDT:USDT", "15m", limit=1)
+    assert rows == [[1700000000000, 100.0, 110.0, 90.0, 105.0, 1.0]]
+    # Bars cut by the limit must not remain hittable through the evidence seam.
+    assert gate_swap.get_gate_swap_volume_evidence("BTC/USDT:USDT", "15m", 1700000000000)
+    assert gate_swap.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000900000) is None
+    assert gate_swap.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700001800000) is None
