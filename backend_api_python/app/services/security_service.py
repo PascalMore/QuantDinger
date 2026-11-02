@@ -5,7 +5,6 @@ import os
 import json
 import hashlib
 import requests
-from datetime import datetime, timedelta
 from typing import Tuple, Dict, Any
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from app.config.settings import Config
@@ -251,33 +250,62 @@ class SecurityService:
             with get_db_connection() as db:
                 cur = db.cursor()
                 
-                # Count failed attempts in the time window
-                window_start = datetime.now() - timedelta(minutes=window_minutes)
+                # Use the database clock for timestamps written by the database.
                 cur.execute(
                     """
-                    SELECT COUNT(*) as count, MAX(attempt_time) as last_attempt
-                    FROM qd_login_attempts
-                    WHERE identifier = ? AND identifier_type = ? 
-                    AND success = FALSE AND attempt_time > ?
+                    WITH recent_failures AS (
+                        SELECT attempt_time
+                        FROM qd_login_attempts
+                        WHERE identifier = ?
+                          AND identifier_type = ?
+                          AND success = FALSE
+                          AND attempt_time > NOW() - make_interval(mins => ?)
+                    ),
+                    threshold_events AS (
+                        SELECT current_attempt.attempt_time AS block_started_at
+                        FROM recent_failures current_attempt
+                        WHERE (
+                            SELECT COUNT(*)
+                            FROM recent_failures prior_attempt
+                            WHERE prior_attempt.attempt_time BETWEEN
+                                current_attempt.attempt_time - make_interval(mins => ?)
+                                AND current_attempt.attempt_time
+                        ) >= ?
+                    )
+                    SELECT
+                        GREATEST(
+                            0,
+                            COALESCE(
+                                EXTRACT(EPOCH FROM (
+                                    MAX(block_started_at)
+                                    + make_interval(mins => ?)
+                                    - NOW()
+                                )),
+                                0
+                            )
+                        )::INTEGER AS remaining_seconds
+                    FROM threshold_events
                     """,
-                    (identifier, identifier_type, window_start)
+                    (
+                        identifier,
+                        identifier_type,
+                        window_minutes + block_minutes,
+                        window_minutes,
+                        max_attempts,
+                        block_minutes,
+                    )
                 )
                 row = cur.fetchone()
+                db.rollback()
                 cur.close()
                 
                 if not row:
                     return False, 0
                 
-                failed_count = row['count'] or 0
-                last_attempt = row['last_attempt']
+                remaining = int(row.get('remaining_seconds') or 0)
                 
-                if failed_count >= max_attempts:
-                    # Check if still in block period
-                    if last_attempt:
-                        block_until = last_attempt + timedelta(minutes=block_minutes)
-                        if datetime.now() < block_until:
-                            remaining = int((block_until - datetime.now()).total_seconds())
-                            return True, remaining
+                if remaining > 0:
+                    return True, remaining
                 
                 return False, 0
                 
@@ -379,32 +407,39 @@ class SecurityService:
             with get_db_connection() as db:
                 cur = db.cursor()
                 
-                # Check email rate limit (one code per minute per email)
-                rate_limit_time = datetime.now() - timedelta(seconds=self.code_rate_limit_seconds)
+                # Check email rate limit (one code per minute per email).
+                # The database clock also writes created_at, so keep both sides
+                # of the comparison in the database timezone.
                 cur.execute(
                     """
                     SELECT COUNT(*) as count FROM qd_verification_codes
-                    WHERE email = ? AND created_at > ?
+                    WHERE email = ?
+                      AND created_at > NOW() - make_interval(secs => ?)
                     """,
-                    (email, rate_limit_time)
+                    (email, self.code_rate_limit_seconds)
                 )
                 row = cur.fetchone()
                 if row and row['count'] > 0:
+                    db.rollback()
+                    cur.close()
                     return False, f'Please wait {self.code_rate_limit_seconds} seconds before requesting another code'
                 
                 # Check IP hourly limit
-                hour_ago = datetime.now() - timedelta(hours=1)
                 cur.execute(
                     """
                     SELECT COUNT(*) as count FROM qd_verification_codes
-                    WHERE ip_address = ? AND created_at > ?
+                    WHERE ip_address = ?
+                      AND created_at > NOW() - INTERVAL '1 hour'
                     """,
-                    (ip_address, hour_ago)
+                    (ip_address,)
                 )
                 row = cur.fetchone()
                 if row and row['count'] >= self.code_ip_hourly_limit:
+                    db.rollback()
+                    cur.close()
                     return False, 'Too many verification code requests from this IP. Try again later.'
                 
+                db.rollback()
                 cur.close()
                 return True, 'allowed'
                 
@@ -438,15 +473,14 @@ class SecurityService:
                     (lock_key,),
                 )
 
-                hour_ago = datetime.now() - timedelta(hours=1)
                 cur.execute(
                     """
                     SELECT COUNT(*) as count FROM qd_security_logs
                     WHERE action = 'registration_rate_slot'
                       AND ip_address = ?
-                      AND created_at > ?
+                      AND created_at > NOW() - INTERVAL '1 hour'
                     """,
-                    (ip, hour_ago),
+                    (ip,),
                 )
                 row = cur.fetchone()
                 registration_count = int((row or {}).get('count') or 0)
@@ -518,23 +552,27 @@ class SecurityService:
             Number of records deleted
         """
         deleted = 0
-        cutoff = datetime.now() - timedelta(days=days)
-        
         try:
             with get_db_connection() as db:
                 cur = db.cursor()
                 
                 # Clean old login attempts
                 cur.execute(
-                    "DELETE FROM qd_login_attempts WHERE attempt_time < ?",
-                    (cutoff,)
+                    """
+                    DELETE FROM qd_login_attempts
+                    WHERE attempt_time < NOW() - make_interval(days => ?)
+                    """,
+                    (days,)
                 )
                 deleted += cur.rowcount or 0
                 
                 # Clean expired verification codes
                 cur.execute(
-                    "DELETE FROM qd_verification_codes WHERE expires_at < ?",
-                    (cutoff,)
+                    """
+                    DELETE FROM qd_verification_codes
+                    WHERE expires_at < NOW() - make_interval(days => ?)
+                    """,
+                    (days,)
                 )
                 deleted += cur.rowcount or 0
                 

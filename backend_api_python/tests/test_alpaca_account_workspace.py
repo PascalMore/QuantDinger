@@ -119,6 +119,20 @@ def test_orders_keep_fill_time_price_and_fractional_quantity(monkeypatch):
     assert order["fee_status"] == "actual_zero"
 
 
+def test_fills_route_returns_authoritative_activity_source(workspace, monkeypatch):
+    client = MagicMock()
+    client.get_fill_history.return_value = [{"id": "exchange-alpaca-fill-1"}]
+    monkeypatch.setattr(alpaca, "_require_connected_client", lambda: (client, None))
+    with workspace.test_request_context("/?credential_id=11&symbol=AAPL&limit=20"):
+        response = inspect.unwrap(alpaca.get_fills)()
+    assert response.get_json() == {
+        "success": True,
+        "data": [{"id": "exchange-alpaca-fill-1"}],
+        "source": "exchange",
+    }
+    client.get_fill_history.assert_called_once_with(symbol="AAPL", limit=20)
+
+
 @pytest.mark.parametrize("status,allowed", [("filled", False), ("canceled", False), ("pending_cancel", False), ("unknown", False), ("partially_filled", True), ("new", True)])
 def test_cancel_rechecks_broker_order_state(status, allowed, monkeypatch):
     client = AlpacaClient(AlpacaConfig(api_key="PKtest", secret_key="secret"))

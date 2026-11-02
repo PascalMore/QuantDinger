@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any, Mapping
 
 from app.services.market_context import parse_crypto_identifier
 
@@ -68,6 +69,25 @@ def parse_instrument(value: object, *, default_market: str = "") -> InstrumentSp
         market_type=market_type,
         instrument_id=raw,
     )
+
+
+def instrument_key_from_metadata(item: Mapping[str, Any]) -> str:
+    market = str(item.get("market") or "").strip()
+    symbol = str(item.get("symbol") or "").strip()
+    if market and symbol:
+        raw = f"{market}:{symbol}"
+        if _normalize_market(market) == "Crypto":
+            exchange_id = str(item.get("exchange_id") or "").strip()
+            market_type = str(item.get("market_type") or "").strip()
+            if exchange_id:
+                raw += f"@{exchange_id}"
+                if market_type:
+                    raw += f":{market_type}"
+            elif market_type:
+                raw += f"@{market_type}"
+        return parse_instrument(raw).key
+    fallback = item.get("key") or item.get("instrument_id")
+    return parse_instrument(fallback, default_market=market).key if fallback else ""
 
 
 def infer_market(symbol: str) -> str:

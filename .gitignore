@@ -63,6 +63,10 @@ venv/
 .venv/
 env/
 backend_api_python/.test_deps/
+backend_api_python/.coverage
+backend_api_python/.coverage.*
+backend_api_python/coverage*.xml
+backend_api_python/htmlcov/
 
 # ========================
 # Node (if any remain)

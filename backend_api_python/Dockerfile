@@ -1,6 +1,6 @@
 # QuantDinger Backend API Dockerfile
 # BASE_IMAGE can be overridden from docker-compose (e.g. IMAGE_PREFIX for mirror pulls).
-ARG BASE_IMAGE=python:3.12-slim-bookworm
+ARG BASE_IMAGE=python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70
 FROM ${BASE_IMAGE}
 
 # BUILD_REGION switches apt/PyPI sources:
@@ -58,11 +58,12 @@ RUN set -eux; \
           "pip>=26.1.2,<27"; \
       pip install --no-cache-dir --prefer-binary --timeout 180 \
           -i https://mirrors.aliyun.com/pypi/simple/ \
+          --no-deps \
           -r requirements.lock \
-        || pip install --no-cache-dir --prefer-binary --timeout 180 -r requirements.lock; \
+        || pip install --no-cache-dir --prefer-binary --timeout 180 --no-deps -r requirements.lock; \
     else \
       python -m pip install --no-cache-dir --timeout 180 --retries 5 --upgrade "pip>=26.1.2,<27"; \
-      pip install --no-cache-dir --prefer-binary --timeout 180 -r requirements.lock; \
+      pip install --no-cache-dir --prefer-binary --timeout 180 --no-deps -r requirements.lock; \
     fi; \
     apt-get purge -y --auto-remove build-essential python3-dev libffi-dev libssl-dev; \
     rm -rf /var/lib/apt/lists/*

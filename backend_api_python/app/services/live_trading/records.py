@@ -183,7 +183,11 @@ def _fetch_position_fuzzy(strategy_id: int, symbol: str, side: str) -> Tuple[Dic
     return {}, canon
 
 
-def strategy_allowed_symbols(strategy_config: Dict[str, Any]) -> Set[str]:
+def strategy_allowed_symbols(
+    strategy_config: Dict[str, Any],
+    *,
+    strategy_id: int = 0,
+) -> Set[str]:
     """
     Symbols a strategy is allowed to own in ``qd_strategy_positions``.
 
@@ -196,9 +200,11 @@ def strategy_allowed_symbols(strategy_config: Dict[str, Any]) -> Set[str]:
     if not isinstance(trading_config, dict):
         trading_config = {}
 
+    dynamic_universe = False
     for raw in (strategy_config.get("symbol"), trading_config.get("symbol")):
         text = str(raw or "").strip()
         if text.lower().startswith(("basket:", "universe:")):
+            dynamic_universe = True
             continue
         norm = normalize_strategy_symbol(text)
         if norm:
@@ -207,6 +213,8 @@ def strategy_allowed_symbols(strategy_config: Dict[str, Any]) -> Set[str]:
     manifest = trading_config.get("strategy_manifest") or trading_config.get("strategyManifest") or {}
     if isinstance(manifest, dict):
         universe = manifest.get("universe") or {}
+        if isinstance(universe, dict) and str(universe.get("reference") or "").strip():
+            dynamic_universe = True
         instruments = universe.get("instruments") or [] if isinstance(universe, dict) else []
         for instrument in instruments:
             if not isinstance(instrument, dict):
@@ -214,6 +222,31 @@ def strategy_allowed_symbols(strategy_config: Dict[str, Any]) -> Set[str]:
             norm = normalize_strategy_symbol(str(instrument.get("symbol") or "").strip())
             if norm:
                 allowed.add(norm.upper())
+
+    # A reference-backed portfolio owns the concrete symbols created by its own
+    # fills. They are not persisted in the static manifest, so include only this
+    # strategy's ledger symbols when reconciling its exchange snapshot.
+    sid = int(strategy_id or strategy_config.get("strategy_id") or strategy_config.get("id") or 0)
+    if dynamic_universe and sid > 0:
+        try:
+            with get_db_connection() as db:
+                cur = db.cursor()
+                cur.execute(
+                    """
+                    SELECT symbol FROM qd_strategy_positions WHERE strategy_id = %s
+                    UNION
+                    SELECT symbol FROM qd_strategy_trades WHERE strategy_id = %s
+                    """,
+                    (sid, sid),
+                )
+                rows = cur.fetchall() or []
+                cur.close()
+            for row in rows:
+                norm = normalize_strategy_symbol(str(row.get("symbol") or "").strip())
+                if norm:
+                    allowed.add(norm.upper())
+        except Exception:
+            pass
 
     return allowed
 

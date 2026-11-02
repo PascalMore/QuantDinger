@@ -15,6 +15,7 @@ from app.services.live_trading.gate import GateSpotClient, GateUsdtFuturesClient
 from app.services.live_trading.htx import HtxClient
 from app.services.live_trading.okx import OkxClient
 from app.services.alpaca_trading import AlpacaClient
+from app.services.ibkr_trading import IBKRClient
 from app.services.live_trading.symbols import (
     to_bitget_um_symbol,
     to_gate_currency_pair,
@@ -434,6 +435,27 @@ def _alpaca_rows(
     return output
 
 
+def _ibkr_rows(client: IBKRClient, symbol: str, side: str) -> List[Dict[str, Any]]:
+    wanted_side = "SLD" if side == "long" else "BOT"
+    output: List[Dict[str, Any]] = []
+    for row in client.get_executions(symbol=symbol):
+        if not isinstance(row, dict) or str(row.get("side") or "").upper() != wanted_side:
+            continue
+        item = _fill(
+            fill_id=row.get("execution_id"),
+            qty=row.get("quantity"),
+            price=row.get("price"),
+            fee=row.get("commission"),
+            fee_ccy=row.get("commission_ccy") or "USD",
+            closed_at=row.get("executed_at"),
+            exchange_order_id=row.get("order_id") or row.get("local_order_id"),
+            client_order_id=row.get("client_order_id"),
+        )
+        if item:
+            output.append(item)
+    return output
+
+
 def _select_exact_close(
     rows: Iterable[Dict[str, Any]],
     *,
@@ -498,6 +520,8 @@ def resolve_exchange_external_close(
     try:
         if isinstance(client, AlpacaClient):
             rows = _alpaca_rows(client, symbol, side, opened_after)
+        elif isinstance(client, IBKRClient):
+            rows = _ibkr_rows(client, symbol, side)
         elif isinstance(client, (BinanceFuturesClient, BinanceSpotClient)):
             rows = _binance_rows(client, symbol, side)
         elif isinstance(client, BybitClient):

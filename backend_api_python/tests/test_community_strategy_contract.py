@@ -54,6 +54,28 @@ class MarketplaceStrategyContractTests(unittest.TestCase):
     def test_missing_manifest_does_not_publish_an_empty_contract(self):
         self.assertIsNone(_marketplace_contract_payload({}, {}, source="published_code"))
 
+    def test_broker_metadata_does_not_leak_into_published_equity_identity(self):
+        manifest = {
+            "apiVersion": 2,
+            "strategyType": "cta",
+            "primaryFrequency": "1d",
+            "universe": {
+                "kind": "static",
+                "reference": "",
+                "instruments": [{
+                    "market": "USStock",
+                    "symbol": "DXCM",
+                    "exchange_id": "NASDAQ",
+                    "market_type": "spot",
+                }],
+            },
+            "subscriptions": [],
+        }
+
+        contract = _marketplace_contract_payload(manifest, {}, source="published_code")
+
+        self.assertEqual(contract["bound_instruments"], ["USStock:DXCM"])
+
 
 if __name__ == "__main__":
     unittest.main()

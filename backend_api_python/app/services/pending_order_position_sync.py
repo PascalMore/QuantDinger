@@ -232,7 +232,7 @@ def _purge_flat_strategy_positions_from_exchange(
             "[PositionSync] Strategy %s skips flat-leg purge: snapshot served from cache.", sid
         )
         return 0
-    allowed = strategy_allowed_symbols(strategy_config or {})
+    allowed = strategy_allowed_symbols(strategy_config or {}, strategy_id=sid)
     if not allowed:
         return 0
 
@@ -575,10 +575,10 @@ class PendingOrderPositionSyncMixin:
                     snapshot_started_at = time.time()
                     if is_exchange_sync_backoff(cache_key):
                         logger.warning(
-                            "[PositionSync] Strategy %s skipped: %s sync backoff active (key=%s)",
+                            "[PositionSync] Strategy %s skipped: %s %s sync backoff active",
                             sid,
                             exchange_id,
-                            cache_key,
+                            market_type,
                         )
                         continue
 
@@ -616,8 +616,9 @@ class PendingOrderPositionSyncMixin:
                             if is_exchange_rate_limit_error(msg):
                                 set_exchange_sync_backoff(cache_key)
                                 logger.error(
-                                    "[PositionSync] Binance rate limit for key=%s; backing off %ss. error=%s",
-                                    cache_key,
+                                    "[PositionSync] Binance rate limit for strategy=%s market=%s; backing off %ss. error=%s",
+                                    sid,
+                                    market_type,
                                     int(exchange_sync_backoff_sec()),
                                     msg,
                                 )
@@ -1057,7 +1058,13 @@ class PendingOrderPositionSyncMixin:
                             snapshot_started_at=snapshot_started_at,
                         )
                 except Exception as l1_err:
-                    logger.warning("[PositionSync] L1 account sync failed key=%s: %s", cache_key, l1_err)
+                    logger.warning(
+                        "[PositionSync] L1 account sync failed strategy=%s exchange=%s market=%s: %s",
+                        sid,
+                        exchange_id,
+                        market_type,
+                        l1_err,
+                    )
 
                 if client is None:
                     try:

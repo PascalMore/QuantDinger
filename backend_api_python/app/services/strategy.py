@@ -456,6 +456,8 @@ class StrategyService:
             resolved = resolve_exchange_config(exchange_config, user_id=user_id)
             client = create_client(resolved, market_type=str(resolved.get("market_type") or "swap"))
             data = client.get_account_summary() if hasattr(client, "get_account_summary") else {}
+            if not isinstance(data, dict) or data.get("success") is False:
+                return {"success": False, "message": "strategyV2.connectionFailed", "data": data}
             return {"success": True, "message": "strategyV2.connectionOk", "data": data}
         except Exception as exc:
             return {"success": False, "message": str(exc), "data": None}

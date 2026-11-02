@@ -30,25 +30,31 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write   # needed to create a GitHub Release
-  packages: write   # needed to push to GHCR
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/openbyteinc/quantdinger-backend
 
 jobs:
   backend:
     name: Build & push backend image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4.5.2
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -56,9 +62,9 @@ jobs:
 
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/quantdinger-backend
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -81,7 +87,8 @@ jobs:
           echo "git_tag=${git_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push backend
-        uses: docker/build-push-action@v7
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: ./backend_api_python
           file: ./backend_api_python/Dockerfile
@@ -98,11 +105,26 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      # ----- Release-only step (skipped on workflow_dispatch) -----
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
+      - name: Sign backend image
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: >-
+          cosign sign --yes
+          "${IMAGE_NAME}@${IMAGE_DIGEST}"
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: backend
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
       - name: Create or update GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           generate_release_notes: true
           append_body: true   # preserve UI-authored notes; append our snippet
@@ -112,9 +134,18 @@ jobs:
             **Docker image (multi-arch, amd64 + arm64):**
 
             ```bash
-            docker pull ghcr.io/${{ github.repository_owner }}/quantdinger-backend:${{ github.ref_name }}
+            docker pull ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
             ```
 
             Pin in `docker-compose.ghcr.yml` via `IMAGE_TAG=${{ github.ref_name }}` in a project-root `.env`.
+
+            The image is signed with Sigstore keyless signing. Verify it with:
+
+            ```bash
+            cosign verify \
+              --certificate-identity-regexp '^https://github.com/OpenByteInc/QuantDinger/.github/workflows/docker-publish.yml@refs/tags/v.*$' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ```
 
             ---

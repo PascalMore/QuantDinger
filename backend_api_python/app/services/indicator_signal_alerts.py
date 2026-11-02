@@ -13,7 +13,7 @@ import math
 import os
 import threading
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
@@ -760,7 +760,7 @@ class IndicatorSignalAlertService:
     def _format_bar_time(self, value: Any, idx: int) -> str:
         if isinstance(value, (int, float)):
             try:
-                return datetime.utcfromtimestamp(value).isoformat()
+                return datetime.fromtimestamp(value, timezone.utc).replace(tzinfo=None).isoformat()
             except Exception:
                 return str(value)
         return str(value or idx)

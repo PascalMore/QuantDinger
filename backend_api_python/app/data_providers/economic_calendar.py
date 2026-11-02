@@ -5,7 +5,7 @@ import hashlib
 import math
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -973,7 +973,7 @@ def _importance_zh(importance: str) -> str:
 def _parse_date(row: Dict[str, Any]) -> str:
     raw = row.get("date") or row.get("time") or row.get("datetime") or ""
     if isinstance(raw, (int, float)):
-        return datetime.utcfromtimestamp(raw).strftime("%Y-%m-%d")
+        return datetime.fromtimestamp(raw, timezone.utc).strftime("%Y-%m-%d")
     text = str(raw).strip()
     if not text:
         return datetime.now().strftime("%Y-%m-%d")

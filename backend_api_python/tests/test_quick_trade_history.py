@@ -136,6 +136,7 @@ def test_history_filters_by_account_symbol_and_market(monkeypatch):
         response = handler()
 
     payload = response.get_json()
+    assert payload["data"]["source"] == "local_fallback"
     assert "credential_id = %s" in cursor.query
     assert "UPPER(symbol) = UPPER(%s)" in cursor.query
     assert "market_type = %s" in cursor.query
@@ -150,3 +151,56 @@ def test_history_filters_by_account_symbol_and_market(monkeypatch):
     assert payload["data"]["trades"][0]["entry_price"] == 74000
     assert payload["data"]["trades"][0]["realized_pnl"] == 12.5
     assert payload["data"]["trades"][0]["created_at"] == "2026-10-18T03:35:00Z"
+
+
+def test_exchange_history_prefers_native_fills_over_local_filled_rows(monkeypatch):
+    cursor = _Cursor()
+
+    @contextmanager
+    def fake_connection():
+        yield _Db(cursor)
+
+    exchange_fill = {
+        "id": "exchange-901",
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "order_type": "fill",
+        "amount": 81.0,
+        "price": 0.0,
+        "leverage": 0,
+        "market_type": "swap",
+        "status": "filled",
+        "exchange_order_id": "901",
+        "filled_amount": 0.001,
+        "avg_fill_price": 81000.0,
+        "commission": 0.0324,
+        "commission_ccy": "USDT",
+        "commission_quote": 0.0324,
+        "realized_pnl": 0.0,
+        "source": "exchange",
+        "is_close": False,
+        "close_side": "",
+        "created_at": "2026-10-18T03:36:00+00:00",
+    }
+    monkeypatch.setattr(quick_trade, "get_db_connection", fake_connection)
+    monkeypatch.setattr(quick_trade, "_sync_exchange_close_fills", lambda **kwargs: 0)
+    from app.services.quick_trade import trade_history
+    monkeypatch.setattr(trade_history, "build_exchange_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(trade_history, "create_exchange_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        trade_history,
+        "exchange_trade_history",
+        lambda *args, **kwargs: {"supported": True, "trades": [exchange_fill]},
+    )
+    app = Flask(__name__)
+    handler = inspect.unwrap(quick_trade.get_history)
+
+    with app.test_request_context(
+        "/api/quick-trade/history?limit=20&credential_id=305&symbol=BTC/USDT&market_type=swap"
+    ):
+        g.user_id = 99
+        response = handler()
+
+    payload = response.get_json()
+    assert payload["data"]["source"] == "exchange"
+    assert payload["data"]["trades"] == [exchange_fill]

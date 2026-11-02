@@ -62,6 +62,11 @@ def test_registration_slot_is_reserved_atomically(monkeypatch):
 
     queries = [query for query, _ in connection.cursor_instance.statements]
     assert any("pg_advisory_xact_lock" in query for query in queries)
+    assert any(
+        "NOW() - INTERVAL '1 hour'" in query
+        for query in queries
+        if "registration_rate_slot" in query and "SELECT" in query
+    )
     assert any("registration_rate_slot" in query and "INSERT" in query for query in queries)
     assert connection.commits == 1
     assert connection.rollbacks == 0

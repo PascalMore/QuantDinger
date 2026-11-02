@@ -40,6 +40,34 @@ def test_parameterized_binding_is_structurally_detected_and_adapted():
     assert derive_strategy_contract(adapted)["bound_instruments"] == ["USStock:MSFT"]
 
 
+def test_broker_metadata_does_not_change_marketplace_equity_identity(monkeypatch):
+    from app.services import strategy_marketplace_contract as contract_module
+
+    original_compile = contract_module.compile_strategy_v2
+
+    class _Program:
+        manifest = type("_Manifest", (), {"metadata": lambda self: {
+            **original_compile(PARAMETERIZED).manifest.metadata(),
+            "universe": {
+                "kind": "static",
+                "reference": "",
+                "instruments": [{
+                    "market": "USStock",
+                    "symbol": "SPY",
+                    "exchange_id": "NASDAQ",
+                    "market_type": "spot",
+                }],
+            },
+        }})()
+
+    monkeypatch.setattr(contract_module, "compile_strategy_v2", lambda _code: _Program())
+
+    contract = contract_module.derive_strategy_contract(PARAMETERIZED)
+
+    assert contract["bound_instruments"] == ["USStock:SPY"]
+    assert contract["binding_mode"] == "parameterized"
+
+
 def test_literal_strategy_remains_fixed_and_cannot_claim_other_instrument():
     code = '''
 def initialize(context):

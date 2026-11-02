@@ -1,10 +1,12 @@
 <div align="center">
   <a href="https://github.com/OpenByteInc/QuantDinger">
-    <img src="docs/screenshots/logo.png" alt="QuantDinger logo" width="420">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/logo-dark.png">
+      <img src="docs/screenshots/logo.png" alt="QuantDinger logo" width="420">
+    </picture>
   </a>
 
-  <h1>QuantDinger</h1>
-  <p><strong>Open-source AI Trading OS</strong></p>
+  <p><strong>QuantDinger - Open-Source AI Quant Research Platform</strong></p>
   <p>Turn trading ideas into Python strategies, backtests, paper trading, live execution, and monitoring — all in one self-hosted stack.</p>
   <p><strong>QuantDinger is a product of Open Byte Inc.</strong></p>
   <p><em>AI research → Strategy code → Backtest → Paper/Live execution → Monitoring</em></p>
@@ -14,6 +16,26 @@
     ·
     <a href="README_CN.md"><strong>简体中文</strong></a>
     ·
+    <a href="README_TW.md"><strong>繁體中文</strong></a>
+    ·
+    <a href="README_JA.md"><strong>日本語</strong></a>
+    ·
+    <a href="README_KO.md"><strong>한국어</strong></a>
+    ·
+    <a href="README_DE.md"><strong>Deutsch</strong></a>
+    ·
+    <a href="README_FR.md"><strong>Français</strong></a>
+    ·
+    <a href="README_RU.md"><strong>Русский</strong></a>
+    ·
+    <a href="README_AR.md"><strong>العربية</strong></a>
+    ·
+    <a href="README_TH.md"><strong>ไทย</strong></a>
+    ·
+    <a href="README_VI.md"><strong>Tiếng Việt</strong></a>
+  </p>
+
+  <p>
     <a href="docs/api/README.md"><strong>API</strong></a>
     ·
     <a href="docs/agent/README.md"><strong>AI Agents & MCP</strong></a>
@@ -23,6 +45,8 @@
     <a href="https://ai.quantdinger.com"><strong>Live App</strong></a>
     ·
     <a href="https://www.quantdinger.com"><strong>Website</strong></a>
+    ·
+    <a href="https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari"><strong>Deploy on AWS Marketplace</strong></a>
     ·
     <a href="#watch-quantdinger-in-action"><strong>Video Demo</strong></a>
     ·
@@ -38,6 +62,14 @@
 
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square" alt="Apache 2.0"></a>
+    <a href="https://codecov.io/gh/OpenByteInc/QuantDinger"><img src="https://codecov.io/gh/OpenByteInc/QuantDinger/branch/main/graph/badge.svg" alt="Codecov"></a>
+    <a href="https://scorecard.dev/viewer/?uri=github.com/OpenByteInc/QuantDinger"><img src="https://api.scorecard.dev/projects/github.com/OpenByteInc/QuantDinger/badge" alt="OpenSSF Scorecard"></a>
+    <a href="https://www.bestpractices.dev/projects/15860"><img src="https://www.bestpractices.dev/projects/15860/baseline" alt="OpenSSF Baseline"></a>
+    <a href="https://www.bestpractices.dev/projects/15860"><img src="https://www.bestpractices.dev/projects/15860/badge" alt="OpenSSF Best Practices"></a>
+    <a href="https://sonarcloud.io/summary/new_code?id=OpenByteInc_QuantDinger"><img src="https://sonarcloud.io/api/project_badges/measure?project=OpenByteInc_QuantDinger&metric=alert_status" alt="SonarQube Cloud Quality Gate"></a>
+    <a href="https://api.reuse.software/info/github.com/OpenByteInc/QuantDinger"><img src="https://api.reuse.software/badge/github.com/OpenByteInc/QuantDinger" alt="REUSE status"></a>
+    <a href="docs/compliance/OPENCHAIN_ISO_5230_SELF_ASSESSMENT.md" title="Open Byte Inc. OpenChain ISO/IEC 5230 conformant program"><img src="https://img.shields.io/badge/OpenChain_ISO%2FIEC_5230-conformant-0B6B53?style=flat-square" alt="OpenChain ISO/IEC 5230 conformant"></a>
+    <a href="docs/compliance/OPENCHAIN_ISO_18974_SELF_ASSESSMENT.md" title="Open Byte Inc. OpenChain ISO/IEC 18974 conformant program"><img src="https://img.shields.io/badge/OpenChain_ISO%2FIEC_18974-conformant-0B6B53?style=flat-square" alt="OpenChain ISO/IEC 18974 conformant"></a>
     <img src="docs/badges/python-3.12.svg" alt="Python 3.12">
     <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL 18">
     <img src="https://img.shields.io/badge/Redis-8-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis 8">
@@ -56,16 +88,33 @@
     <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=quantdinger" title="Atlas Cloud — AI inference sponsor">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="https://www.atlascloud.ai/logo-white.svg">
-        <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="142">
+        <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="134" align="middle">
       </picture>
     </a>
     &nbsp;&nbsp;&nbsp;&nbsp;
-    <a href="https://aws.amazon.com/" title="Amazon Web Services — cloud infrastructure sponsor">
+    <a href="https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari" title="Deploy QuantDinger on AWS Marketplace">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="https://a0.awsstatic.com/libra-css/images/logos/aws_smile-header-desktop-en-white_59x35.png">
-        <img src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg" alt="Amazon Web Services" width="70">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg" alt="Amazon Web Services" width="54" align="middle">
       </picture>
     </a>
+    &nbsp;&nbsp;&nbsp;&nbsp;
+    <a href="https://openai.com/" title="OpenAI — open-source development tooling support">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/badges/openai-wordmark-white.svg">
+        <img src="docs/badges/openai-wordmark-black.svg" alt="OpenAI" width="150" align="middle">
+      </picture>
+    </a>
+  </p>
+  <p>
+    <a href="https://www.nvidia.com/en-us/startups/" title="Open Byte Inc. has joined NVIDIA Inception">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/badges/nvidia-inception-member-dark.png">
+        <img src="docs/badges/nvidia-inception-member.png" alt="NVIDIA Inception Program" width="64" align="middle">
+      </picture>
+    </a>
+    &nbsp;&nbsp;
+    <strong>Open Byte Inc. has joined NVIDIA Inception.</strong>
   </p>
 </div>
 
@@ -81,7 +130,11 @@
 ## Watch QuantDinger in action
 
 <p align="center">
-  <img src="docs/screenshots/quantdinger-v5-2x.gif" alt="QuantDinger product demo at 2× speed" width="800">
+  <a href="https://youtu.be/y9EiCZSaIt0">
+    <img src="docs/screenshots/quantdinger-youtube-overview.png" alt="Watch the latest QuantDinger overview on YouTube" width="800">
+  </a>
+  <br>
+  <strong><a href="https://youtu.be/y9EiCZSaIt0">▶ Watch the latest QuantDinger product tour on YouTube</a></strong>
 </p>
 
 ## What QuantDinger is
@@ -105,6 +158,12 @@ and deployment remain under the operator's control.
 
 ### Strategy evolution and signal-only virtual accounts
 
+- **Factor Lab** loads one point-in-time universe panel once and benchmarks up
+  to 40 registered technical, fundamental, TA-Lib, or Qlib factors. It uses a
+  time-ordered holdout, out-of-sample IC retention, Benjamini-Hochberg
+  false-discovery control, cost-aware scoring, factor-life-cycle labels, and
+  cross-factor IC correlation. The same workflow is available from the web UI,
+  Human API, Agent Gateway, and MCP.
 - **Strategy evolution** searches declared tunable parameters with random,
   grid, or TPE optimization, using bar-count walk-forward validation and a final
   blind holdout. Jobs run asynchronously with per-strategy history, automatic
@@ -214,6 +273,25 @@ before changing replica counts or moving the stack to multiple hosts.
 
 ## Quick start
 
+If you are unsure whether to choose Windows, Linux/macOS, a cloud server, SaaS,
+or a mobile client, start with the
+[installation and deployment overview](docs/getting-started/INSTALLATION.md).
+Each path covers installation, verification, upgrades, post-install setup, and troubleshooting.
+
+### Fastest cloud deployment: AWS Marketplace
+
+<p align="center">
+  <a href="https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari"><img src="https://img.shields.io/badge/AWS%20Marketplace-Deploy%20QuantDinger-FF9900?style=for-the-badge&logo=amazonaws&logoColor=white" alt="Deploy QuantDinger from AWS Marketplace"></a>
+</p>
+
+Launch the free QuantDinger software from its public
+[AWS Marketplace product page](https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari).
+The Marketplace delivery option provisions the single-node container stack and
+its required AWS infrastructure through CloudFormation. QuantDinger has no
+software fee; normal AWS infrastructure charges still apply. See the
+[deployment and upgrade guide](docs/deployment/AWS_MARKETPLACE_DEPLOYMENT.md)
+for first login, backups, upgrades, rollback, and cost notes.
+
 ### Option A: prebuilt images
 
 Prerequisites: Docker with Compose v2. Node.js and a local Python environment are
@@ -284,18 +362,37 @@ legacy-image recovery and rootless/NFS notes.
 ```bash
 git clone https://github.com/OpenByteInc/QuantDinger.git
 cd QuantDinger
-cp .env.example .env
+python scripts/bootstrap_env.py
 ```
 
-Before the first start, replace the example values in the unified environment file:
+Before the first start, review the unified environment file. The bootstrap command
+already generates the PostgreSQL, session-signing, and credential-encryption
+secrets; set the administrator credentials and review any production-only
+integrations:
 
 | File | Required production values |
 | --- | --- |
-| `.env` | `SECRET_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, administrator, PostgreSQL, Redis, and Grafana credentials |
+| `.env` | Administrator credentials; optional Redis and Grafana credentials; deployment-specific URLs and integrations |
 
-After an update, `docker compose up` runs the one-shot `env-sync` service before
-database and Kafka initialization. It appends newly introduced settings, imports
-missing values from the legacy backend env files, preserves existing values and
+After pulling an update, initialize the unified environment before running any
+Compose command. This one-time step is required when upgrading from releases
+that relied on the former built-in PostgreSQL password:
+
+```bash
+git pull --ff-only
+python3 scripts/bootstrap_env.py
+docker compose up -d --build
+```
+
+The bootstrap command preserves existing credentials and can recover the former
+PostgreSQL password from a legacy `DATABASE_URL` or the existing database
+container. If it detects an existing data volume but cannot recover the password,
+it stops instead of disconnecting the database. Do not invent a replacement
+password and do not delete the volume.
+
+After bootstrap, Compose runs the one-shot `env-sync` service before database and
+Kafka initialization. It appends newly introduced settings, imports missing
+values from legacy backend environment files, preserves existing values and
 comments, and creates a timestamped backup only when the unified file changes.
 The command below remains available for a manual preview or maintenance run:
 
@@ -307,7 +404,9 @@ For a manual one-time migration from older releases, add
 `--legacy backend_api_python/.env` (source deployment) or `--legacy backend.env`
 (old GHCR deployment). The old file is not deleted.
 
-Generate independent secrets with:
+The bootstrap command creates `.env`, preserves existing values during upgrades,
+and generates independent PostgreSQL, session, and credential-encryption secrets.
+To generate another independent secret manually:
 
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
@@ -323,10 +422,26 @@ docker compose ps
 The base stack does not start Prometheus, Grafana, or Alertmanager. This keeps
 the default open-source installation smaller.
 
-For detailed installation paths, Windows notes, China mirror settings, and
-PostgreSQL migration guidance, see
-[Installation troubleshooting](docs/deployment/INSTALL_TROUBLESHOOTING.md) and the
-[cloud deployment guide](docs/deployment/CLOUD_DEPLOYMENT_EN.md).
+For complete platform instructions, see [Windows](docs/deployment/WINDOWS_INSTALLATION.md),
+[Linux and macOS](docs/deployment/LINUX_MACOS_INSTALLATION.md),
+[cloud](docs/deployment/CLOUD_DEPLOYMENT_EN.md),
+[SaaS](docs/deployment/SAAS_DEPLOYMENT.md), and
+[mobile client deployment](docs/deployment/MOBILE_CLIENT_DEPLOYMENT.md). Continue with
+[post-installation setup](docs/getting-started/POST_INSTALL_SETUP.md); use the
+[installation FAQ](docs/deployment/INSTALLATION_FAQ.md) and
+[installation troubleshooting](docs/deployment/INSTALL_TROUBLESHOOTING.md) when needed.
+
+After the first login, follow the
+[30-minute quickstart](docs/getting-started/QUICKSTART_30_MINUTES.md) to configure
+the core system and produce a first research result and backtest. Production
+administrators should also read the
+[configuration reference](docs/deployment/CONFIGURATION_REFERENCE.md),
+[backup, restore, and migration guide](docs/deployment/BACKUP_RESTORE_MIGRATION.md),
+and [upgrade and rollback guide](docs/deployment/UPGRADE_ROLLBACK.md).
+
+For the free AWS Marketplace single-node delivery option, including first
+launch, upgrades, backup, rollback, and cost notes, see the
+[AWS Marketplace deployment guide](docs/deployment/AWS_MARKETPLACE_DEPLOYMENT.md).
 
 ## Production deployment
 
@@ -667,10 +782,30 @@ needed when building those clients from source. For deeper ownership rules, read
 
 ## Documentation
 
+Project engineering and assurance documents:
+
+- [Development environment](DEVELOPMENT.md)
+- [Testing policy](docs/getting-started/TESTING.md)
+- [Architecture](docs/architecture/ARCHITECTURE.md)
+- [Governance](GOVERNANCE.md) and [maintainers](MAINTAINERS.md)
+- [Security policy](SECURITY.md)
+- [Security assessment](docs/security/SECURITY_ASSESSMENT.md)
+- [Secure development practices](docs/security/SECURE_DEVELOPMENT.md)
+- [Dependency management policy](docs/security/DEPENDENCY_POLICY.md)
+- [Open source compliance and security assurance program](docs/compliance/README.md)
+- [Release history](CHANGELOG.md)
+
 The maintained documentation index is available at [`docs/README.md`](docs/README.md).
 
 | Topic | Document |
 | --- | --- |
+| Installation and platform choice | [Installation overview](docs/getting-started/INSTALLATION.md) |
+| 30-minute quickstart | [First complete workflow](docs/getting-started/QUICKSTART_30_MINUTES.md) |
+| System configuration | [Configuration reference](docs/deployment/CONFIGURATION_REFERENCE.md) |
+| External services | [Broker, data, and AI integrations](docs/deployment/INTEGRATION_GUIDE.md) |
+| Backup and migration | [Backup, restore, and migration](docs/deployment/BACKUP_RESTORE_MIGRATION.md) |
+| Upgrade and rollback | [Upgrade and rollback](docs/deployment/UPGRADE_ROLLBACK.md) |
+| Incident diagnosis | [Error knowledge base](docs/deployment/ERROR_KNOWLEDGE_BASE.md) |
 | Contributor architecture | [Architecture](docs/architecture/ARCHITECTURE.md) |
 | Module ownership | [Module boundaries](docs/architecture/MODULE_BOUNDARIES.md) |
 | Process and task ownership | [Process roles](docs/architecture/PROCESS_ROLES_AND_TASKS.md) |
@@ -682,7 +817,9 @@ The maintained documentation index is available at [`docs/README.md`](docs/READM
 | Indicator development | [Indicator guide](docs/trading/INDICATOR_DEV_GUIDE.md) |
 | MCP and agents | [Agent documentation](docs/agent/README.md) |
 | Cloud deployment | [Cloud deployment](docs/deployment/CLOUD_DEPLOYMENT_EN.md) |
+| AWS Marketplace | [One-click deployment and upgrade](docs/deployment/AWS_MARKETPLACE_DEPLOYMENT.md) |
 | Installation problems | [Troubleshooting](docs/deployment/INSTALL_TROUBLESHOOTING.md) |
+| Documentation maintenance | [Documentation standard](docs/architecture/DOCUMENTATION_MAINTENANCE.md) |
 
 ## Contributing
 
@@ -697,6 +834,10 @@ and the process for claiming scoped contributor work.
 ## License and commercial terms
 
 - Backend source code is licensed under [Apache License 2.0](LICENSE).
+- This repository passes automated REUSE checks. Open Byte Inc. has completed
+  [OpenChain ISO/IEC 5230 and ISO/IEC 18974 online self-certification and maintains conformance evidence](docs/compliance/README.md).
+  Conformance applies to the defined management-program scope; it is not an
+  independent third-party certification of the QuantDinger software.
 - QuantDinger is a product of **Open Byte Inc**. The name, logo, product
   identity, and commercial licensing are managed separately from the code license.
 - Web frontend source is published in
@@ -759,11 +900,11 @@ QuantDinger's continued development and open-source community are supported by:
 
 <table>
   <tr>
-    <td align="center" width="50%">
+    <td align="center" width="33.33%">
       <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=quantdinger">
         <picture>
           <source media="(prefers-color-scheme: dark)" srcset="https://www.atlascloud.ai/logo-white.svg">
-          <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="190">
+          <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="176" align="middle">
         </picture>
       </a>
       <br><br>
@@ -771,11 +912,11 @@ QuantDinger's continued development and open-source community are supported by:
       <br>
       <sub>AI inference sponsor</sub>
     </td>
-    <td align="center" width="50%">
-      <a href="https://aws.amazon.com/">
+    <td align="center" width="33.33%">
+      <a href="https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari">
         <picture>
           <source media="(prefers-color-scheme: dark)" srcset="https://a0.awsstatic.com/libra-css/images/logos/aws_smile-header-desktop-en-white_59x35.png">
-          <img src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg" alt="Amazon Web Services" width="100">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg" alt="Amazon Web Services" width="72" align="middle">
         </picture>
       </a>
       <br><br>
@@ -783,12 +924,27 @@ QuantDinger's continued development and open-source community are supported by:
       <br>
       <sub>Cloud infrastructure sponsor</sub>
     </td>
+    <td align="center" width="33.33%">
+      <a href="https://openai.com/">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="docs/badges/openai-wordmark-white.svg">
+          <img src="docs/badges/openai-wordmark-black.svg" alt="OpenAI" width="220" align="middle">
+        </picture>
+      </a>
+      <br><br>
+      <strong>OpenAI</strong>
+      <br>
+      <sub>Open-source development tooling sponsor</sub>
+    </td>
   </tr>
 </table>
 
 We are grateful to [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=quantdinger) for supporting AI
-model inference and to [Amazon Web Services](https://aws.amazon.com/) for
-supporting the cloud infrastructure that helps QuantDinger serve its community.
+model inference, to [Amazon Web Services](https://aws.amazon.com/) for cloud
+infrastructure support, and to [OpenAI](https://openai.com/) for open-source
+development tooling support that helps QuantDinger serve its community.
+
+<sub>OpenAI and the OpenAI logo are trademarks of OpenAI. Their inclusion acknowledges program and tooling support and does not imply product certification or endorsement.</sub>
 
 ## Acknowledgements
 

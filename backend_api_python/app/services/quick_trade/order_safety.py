@@ -16,14 +16,31 @@ from app.services.pending_orders.order_quantities import exchange_quantity_snaps
 from app.services.quick_trade.symbols import symbols_match
 
 
-def serialized_quick_trade_close(func):
+def quick_trade_execution_key(body: Optional[Dict[str, Any]], *, user_id: int) -> str:
+    payload = body or {}
+    market_type = str(payload.get("market_type") or "").strip().lower()
+    if market_type in {"future", "futures", "perp", "perpetual"}:
+        market_type = "swap"
+    if market_type not in {"spot", "swap"}:
+        try:
+            leverage = int(payload.get("leverage") or 1)
+        except (TypeError, ValueError):
+            leverage = 1
+        market_type = "swap" if leverage > 1 else "spot"
+    return trade_execution_key(
+        user_id=int(user_id or 0),
+        credential_id=int(payload.get("credential_id") or 0),
+        market_type=market_type,
+        symbol=str(payload.get("symbol") or ""),
+    )
+
+
+def serialized_quick_trade_order(func):
     @wraps(func)
     def wrapped(body, *args, **kwargs):
-        key = trade_execution_key(
+        key = quick_trade_execution_key(
+            body,
             user_id=int(getattr(g, "user_id", 0) or 0),
-            credential_id=int((body or {}).get("credential_id") or 0),
-            market_type=str((body or {}).get("market_type") or "swap"),
-            symbol=str((body or {}).get("symbol") or ""),
         )
         try:
             with trade_execution_lock(key, timeout_sec=3.0):
@@ -32,6 +49,9 @@ def serialized_quick_trade_close(func):
             return jsonify({"code": 0, "msg": "quickTrade.workflow.executionBusy"}), 409
 
     return wrapped
+
+
+serialized_quick_trade_close = serialized_quick_trade_order
 
 
 def normalized_submission_quantity(

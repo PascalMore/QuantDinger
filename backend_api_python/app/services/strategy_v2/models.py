@@ -18,6 +18,8 @@ class InstrumentSpec:
 
     @property
     def key(self) -> str:
+        if str(self.market or "").strip().lower() != "crypto":
+            return f"{self.market}:{self.symbol}"
         suffix = ""
         if self.exchange_id:
             suffix = f"@{self.exchange_id}"

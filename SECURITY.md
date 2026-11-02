@@ -57,7 +57,7 @@ Please **do not open a public GitHub issue** for security vulnerabilities.
 
 Instead, report privately via email:
 
-- **Email**: see the contact address listed in `README.md`
+- **Email**: `support@quantdinger.com`
 - **Subject**: `[Security] Brief description of the issue`
 
 Please include:
@@ -73,11 +73,33 @@ Please include:
 We aim to:
 - acknowledge reports within **72 hours**
 - provide a preliminary assessment within **7 days**
+- provide a remediation or mitigation target within **14 days**
+
+Confirmed vulnerabilities are prioritized using impact, exploitability, and
+exposure. Our normal remediation targets are:
+
+- critical: mitigation or release within 7 days
+- high: mitigation or release within 30 days
+- medium: mitigation or release within 60 days
+- low: scheduled according to risk and maintenance capacity
 
 Timelines may vary depending on the complexity and severity of the issue.
 
 If a report is accepted, we will coordinate a fix and, when appropriate,
 a responsible public disclosure.
+
+## Coordinated Vulnerability Disclosure
+
+We ask reporters to keep vulnerability details private until a fix or agreed
+mitigation is available. QuantDinger will maintain communication with the
+reporter, prepare upgrade guidance, and publish an advisory or a security entry
+in this document when disclosure is safe. Publicly known exploitable
+vulnerabilities of medium or higher severity should not remain unpatched for
+more than 60 days.
+
+Confirmed vulnerabilities are disclosed through GitHub Security Advisories,
+release notes, or the Security Advisories section below. Credit is provided
+unless the reporter requests anonymity.
 
 ---
 
@@ -157,6 +179,11 @@ support responsible disclosure.
   responsibly disclosed two backend security issues resolved in September
   2026. Their clear reports and coordinated-disclosure approach helped us
   validate and remediate both issues safely.
+- **Nikhil Agrawal of Mettle Labs** — responsibly disclosed multiple
+  authenticated authorization issues affecting indicator metadata, analysis
+  performance statistics, and strategy runtime-state isolation in October
+  2026. We appreciate the clear reproductions, remediation guidance, and
+  coordinated-disclosure approach.
 
 ---
 

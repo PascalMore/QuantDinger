@@ -1496,7 +1496,8 @@ def _check_position_alerts():
                        a.notification_config, a.is_triggered, a.last_triggered_at, a.repeat_interval,
                        p.entry_price, p.quantity, p.side, p.name as position_name
                 FROM qd_position_alerts a
-                LEFT JOIN qd_manual_positions p ON a.position_id = p.id
+                LEFT JOIN qd_manual_positions p
+                  ON a.position_id = p.id AND a.user_id = p.user_id
                 WHERE a.is_active = 1
                 ORDER BY a.updated_at ASC, a.id ASC
                 LIMIT ?

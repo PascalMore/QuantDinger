@@ -1,5 +1,7 @@
 """Strategy universe APIs."""
 
+from datetime import date
+
 from flask import g, jsonify, request
 
 from app.openapi.blueprint import HumanBlueprint as Blueprint
@@ -75,32 +77,137 @@ def system_universe_overview():
         return jsonify({"code": 0, "msg": "universe.overviewFailed", "data": None}), 500
 
 
+@universe_blp.route("/admin/system", methods=["POST"])
+@login_required
+@admin_required
+def create_system_universe():
+    try:
+        return _success(
+            get_universe_service().create_system(request.get_json(silent=True) or {}),
+            status=201,
+        )
+    except UniverseError as exc:
+        return _failure(exc)
+    except Exception:
+        logger.exception("create system universe failed")
+        return jsonify({"code": 0, "msg": "universe.createFailed", "data": None}), 500
+
+
+@universe_blp.route("/admin/system/<int:universe_id>", methods=["PUT"])
+@login_required
+@admin_required
+def update_system_universe(universe_id: int):
+    try:
+        return _success(
+            get_universe_service().update_system(
+                universe_id,
+                request.get_json(silent=True) or {},
+            )
+        )
+    except UniverseError as exc:
+        return _failure(exc)
+    except Exception:
+        logger.exception("update system universe failed")
+        return jsonify({"code": 0, "msg": "universe.updateFailed", "data": None}), 500
+
+
+@universe_blp.route("/admin/system/<int:universe_id>/visibility", methods=["PUT"])
+@login_required
+@admin_required
+def set_system_universe_visibility(universe_id: int):
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload.get("visible"), bool):
+            raise UniverseError("universe.invalidVisibility")
+        return _success(
+            get_universe_service().set_system_visibility(universe_id, payload["visible"])
+        )
+    except UniverseError as exc:
+        return _failure(exc)
+    except Exception:
+        logger.exception("set system universe visibility failed")
+        return jsonify({"code": 0, "msg": "universe.updateFailed", "data": None}), 500
+
+
+@universe_blp.route("/admin/system/<int:universe_id>", methods=["DELETE"])
+@login_required
+@admin_required
+def delete_system_universe(universe_id: int):
+    try:
+        return _success(get_universe_service().delete_system(universe_id))
+    except UniverseError as exc:
+        return _failure(exc)
+    except Exception:
+        logger.exception("delete system universe failed")
+        return jsonify({"code": 0, "msg": "universe.deleteFailed", "data": None}), 500
+
+
 @universe_blp.route("/admin/sync", methods=["POST"])
 @login_required
 @admin_required
 def sync_system_universes():
     try:
-        from datetime import date
-        from scripts.refresh_public_universe_snapshots import EXPECTED_MEMBER_COUNTS, LOADERS, apply_snapshot
+        from scripts.backfill_public_universe_history import (
+            SUPPORTED_HISTORY_UNIVERSES,
+            backfill_universe_history,
+        )
+        from scripts.refresh_public_universe_snapshots import (
+            EXPECTED_MEMBER_COUNTS,
+            LOADERS,
+            apply_snapshot,
+            backfill_current_snapshot_as_fixed,
+            load_universe_members,
+        )
 
         payload = request.get_json(silent=True) or {}
         requested = payload.get("codes") or list(LOADERS)
         codes = [str(code).strip() for code in requested if str(code).strip()]
         if not codes or any(code not in LOADERS for code in codes):
             raise UniverseError("universe.invalidSyncSelection")
-        as_of = date.fromisoformat(str(payload.get("as_of") or payload.get("asOf") or date.today().isoformat()))
+        today = date.today()
+        history_from_value = payload.get("history_from") or payload.get("historyFrom")
+        try:
+            as_of = date.fromisoformat(str(payload.get("as_of") or payload.get("asOf") or today.isoformat()))
+            history_from = date.fromisoformat(str(history_from_value)) if history_from_value else None
+        except ValueError as exc:
+            raise UniverseError("universe.invalidHistoryDate") from exc
+        if as_of > today or (history_from and history_from > as_of):
+            raise UniverseError("universe.invalidHistoryDate")
         results = []
         errors = []
+        warnings = []
+        member_cache = {}
+        history_snapshot_cache = {}
         for code in codes:
             try:
-                members = LOADERS[code]()
+                members = load_universe_members(code, member_cache)
                 count = len({item.get("symbol") for item in members if item.get("symbol")})
                 minimum, maximum = EXPECTED_MEMBER_COUNTS[code]
                 if not minimum <= count <= maximum:
                     raise RuntimeError(
                         f"member count failed validation: {count}; expected {minimum}..{maximum}"
                     )
-                results.append(apply_snapshot(code, members, as_of))
+                result = apply_snapshot(code, members, as_of)
+                if history_from and history_from < as_of:
+                    if code in SUPPORTED_HISTORY_UNIVERSES:
+                        result["history"] = backfill_universe_history(
+                            code,
+                            history_from,
+                            as_of,
+                            apply=True,
+                            snapshot_cache=history_snapshot_cache,
+                        )
+                    else:
+                        result["history"] = backfill_current_snapshot_as_fixed(
+                            code,
+                            history_from,
+                            as_of,
+                        )
+                        warnings.append({
+                            "code": code,
+                            "warning": "universe.currentMembershipBackfilled",
+                        })
+                results.append(result)
             except Exception as exc:
                 logger.exception("system universe sync failed for code=%s", code)
                 errors.append({"code": code, "error": str(exc)})
@@ -109,9 +216,20 @@ def sync_system_universes():
             return jsonify({
                 "code": 0,
                 "msg": message,
-                "data": {"as_of": as_of.isoformat(), "results": results, "errors": errors},
+                "data": {
+                    "as_of": as_of.isoformat(),
+                    "history_from": history_from.isoformat() if history_from else None,
+                    "results": results,
+                    "errors": errors,
+                    "warnings": warnings,
+                },
             }), 500
-        return _success({"as_of": as_of.isoformat(), "results": results})
+        return _success({
+            "as_of": as_of.isoformat(),
+            "history_from": history_from.isoformat() if history_from else None,
+            "results": results,
+            "warnings": warnings,
+        })
     except UniverseError as exc:
         return _failure(exc)
     except Exception:

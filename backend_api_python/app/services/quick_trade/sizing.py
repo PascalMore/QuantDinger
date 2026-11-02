@@ -16,7 +16,7 @@ def resolve_order_notional_usdt(amount_usdt: float, leverage: int, market_type: 
     return amount
 
 
-def convert_usdt_to_base_qty(client, symbol: str, usdt_amount: float, market_type: str, limit_price: float = 0.0) -> float:
+def convert_usdt_to_base_qty(client, symbol: str, usdt_amount: float, market_type: str, reference_price: float = 0.0) -> float:
     """
     Convert USDT amount to base asset quantity for all exchanges.
 
@@ -29,7 +29,7 @@ def convert_usdt_to_base_qty(client, symbol: str, usdt_amount: float, market_typ
         symbol: Trading pair (e.g., "ETH/USDT")
         usdt_amount: USDT amount to convert
         market_type: "spot" or "swap"
-        limit_price: For limit orders, use this price if provided (optional)
+        reference_price: A trusted recent price supplied by the caller (optional)
 
     Returns:
         Base asset quantity
@@ -41,10 +41,9 @@ def convert_usdt_to_base_qty(client, symbol: str, usdt_amount: float, market_typ
         # Try to get current price from exchange
         current_price = 0.0
 
-        # For limit orders, use the provided price
-        if limit_price > 0:
-            current_price = limit_price
-            logger.info(f"Using limit price {limit_price} for USDT conversion")
+        if reference_price > 0:
+            current_price = reference_price
+            logger.info(f"Using supplied reference price {reference_price} for USDT conversion")
         else:
             # Try to get current market price from exchange
             if hasattr(client, "get_ticker"):

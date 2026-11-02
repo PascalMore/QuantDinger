@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import threading
 import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -31,6 +32,18 @@ from app.services.live_trading.symbols import to_okx_swap_inst_id, to_okx_spot_i
 
 class OkxClient(BaseRestClient):
     _DEFAULT_BROKER_CODE = "56fa80b0ce8cBCDE"
+    _public_instrument_cache: Dict[
+        Tuple[str, str, str], Tuple[float, Dict[str, Any]]
+    ] = {}
+    _public_instrument_cache_lock = threading.RLock()
+    _account_instrument_cache: Dict[
+        Tuple[str, str, bool, str, str], Tuple[float, Dict[str, Any]]
+    ] = {}
+    _account_instrument_cache_lock = threading.RLock()
+    _account_config_cache: Dict[
+        Tuple[str, str, bool], Tuple[float, Dict[str, Any]]
+    ] = {}
+    _account_config_cache_lock = threading.RLock()
 
     @staticmethod
     def _ensure_header_safe_ascii(value: str, *, field: str) -> str:
@@ -180,7 +193,8 @@ class OkxClient(BaseRestClient):
         return floor_decimal_to_step(value, step)
 
     def _public_request(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        code, data, text = self._request(method, path, params=params, json_body=None, headers=None, data=None)
+        headers = {"x-simulated-trading": "1"} if self.simulated_trading else None
+        code, data, text = self._request(method, path, params=params, json_body=None, headers=headers, data=None)
         if code >= 400:
             raise LiveTradingError(f"OKX HTTP {code}: {text[:500]}")
         if isinstance(data, dict) and str(data.get("code") or "") not in ("0", ""):
@@ -198,7 +212,16 @@ class OkxClient(BaseRestClient):
             return {}
 
         key = f"{it}:{iid}"
+        shared_key = (self.base_url, it, iid)
         now = time.time()
+        with self._public_instrument_cache_lock:
+            shared_cached = self._public_instrument_cache.get(shared_key)
+        if shared_cached:
+            ts, obj = shared_cached
+            if obj and (now - float(ts or 0.0)) <= float(self._inst_cache_ttl_sec or 300.0):
+                self._inst_cache[key] = shared_cached
+                return obj
+
         cached = self._inst_cache.get(key)
         if cached:
             ts, obj = cached
@@ -210,7 +233,62 @@ class OkxClient(BaseRestClient):
         first: Dict[str, Any] = data[0] if isinstance(data, list) and data else {}
         if isinstance(first, dict) and first:
             self._inst_cache[key] = (now, first)
+            with self._public_instrument_cache_lock:
+                self._public_instrument_cache[shared_key] = (now, first)
         return first if isinstance(first, dict) else {}
+
+    def get_account_instrument(self, *, inst_type: str, inst_id: str) -> Dict[str, Any]:
+        """Fetch account-scoped instrument metadata used by WebSocket order entry."""
+        it = str(inst_type or "").strip().upper()
+        iid = str(inst_id or "").strip()
+        if not it or not iid:
+            return {}
+
+        key = f"ACCOUNT:{it}:{iid}"
+        shared_key = (self.base_url, self.api_key, self.simulated_trading, it, iid)
+        now = time.time()
+        with self._account_instrument_cache_lock:
+            shared_cached = self._account_instrument_cache.get(shared_key)
+        if shared_cached:
+            ts, obj = shared_cached
+            if obj and (now - float(ts or 0.0)) <= float(self._inst_cache_ttl_sec or 300.0):
+                self._inst_cache[key] = shared_cached
+                return obj
+
+        cached = self._inst_cache.get(key)
+        if cached:
+            ts, obj = cached
+            if obj and (now - float(ts or 0.0)) <= float(self._inst_cache_ttl_sec or 300.0):
+                return obj
+
+        raw = self._signed_request(
+            "GET",
+            "/api/v5/account/instruments",
+            params={"instType": it},
+        )
+        rows = (raw.get("data") or []) if isinstance(raw, dict) else []
+        match = next(
+            (row for row in rows if isinstance(row, dict) and str(row.get("instId") or "") == iid),
+            {},
+        )
+        if match:
+            self._inst_cache[key] = (now, match)
+            with self._account_instrument_cache_lock:
+                self._account_instrument_cache[shared_key] = (now, match)
+        return match if isinstance(match, dict) else {}
+
+    def prepare_ws_order_entry(self, *, symbol: str, market_type: str) -> None:
+        """Prime account instrument metadata before a latency-sensitive order."""
+        mt = str(market_type or "swap").strip().lower()
+        inst_id = to_okx_spot_inst_id(symbol) if mt == "spot" else to_okx_swap_inst_id(symbol)
+        inst_type = "SPOT" if mt == "spot" else "SWAP"
+        self.get_instrument(inst_type=inst_type, inst_id=inst_id)
+        self.get_account_instrument(
+            inst_type=inst_type,
+            inst_id=inst_id,
+        )
+        if mt != "spot":
+            self.get_account_config()
 
     def _normalize_order_size(self, *, inst_id: str, market_type: str, size: float) -> Tuple[Decimal, Optional[int]]:
         """
@@ -310,13 +388,25 @@ class OkxClient(BaseRestClient):
             and path == "/api/v5/trade/order"
             and isinstance(json_body, dict)
         ):
-            ws_result = submit_okx_order(
-                api_key=self.api_key,
-                secret_key=self.secret_key,
-                passphrase=self.passphrase,
-                body=json_body,
-                simulated=self.simulated_trading,
-            )
+            ws_body = dict(json_body)
+            inst_id = str(ws_body.get("instId") or "").strip()
+            inst_type = "SWAP" if inst_id.endswith("-SWAP") else "SPOT"
+            instrument = self.get_account_instrument(inst_type=inst_type, inst_id=inst_id) if inst_id else {}
+            try:
+                inst_id_code = int(instrument.get("instIdCode") or 0)
+            except (TypeError, ValueError):
+                inst_id_code = 0
+            ws_result = None
+            if inst_id_code > 0:
+                ws_body.pop("instId", None)
+                ws_body["instIdCode"] = inst_id_code
+                ws_result = submit_okx_order(
+                    api_key=self.api_key,
+                    secret_key=self.secret_key,
+                    passphrase=self.passphrase,
+                    body=ws_body,
+                    simulated=self.simulated_trading,
+                )
             if ws_result is not None:
                 return ws_result
 
@@ -742,7 +832,16 @@ class OkxClient(BaseRestClient):
         - posMode: "net_mode" or "long_short_mode"
         """
         key = "account_config"
+        shared_key = (self.base_url, self.api_key, self.simulated_trading)
         now = time.time()
+        with self._account_config_cache_lock:
+            shared_cached = self._account_config_cache.get(shared_key)
+        if shared_cached:
+            ts, obj = shared_cached
+            if obj and (now - float(ts or 0.0)) <= float(self._acct_cfg_cache_ttl_sec or 30.0):
+                self._acct_cfg_cache[key] = shared_cached
+                return obj
+
         cached = self._acct_cfg_cache.get(key)
         if cached:
             ts, obj = cached
@@ -754,6 +853,8 @@ class OkxClient(BaseRestClient):
         first: Dict[str, Any] = data[0] if isinstance(data, list) and data else {}
         if isinstance(first, dict) and first:
             self._acct_cfg_cache[key] = (now, first)
+            with self._account_config_cache_lock:
+                self._account_config_cache[shared_key] = (now, first)
         return first if isinstance(first, dict) else {}
 
     def _resolve_pos_side(self, *, requested_pos_side: str, market_type: str) -> str:
@@ -851,6 +952,14 @@ class OkxClient(BaseRestClient):
             if mt == "spot" or not reduce_only or "51169" not in str(exc):
                 raise
             self._acct_cfg_cache.pop("account_config", None)
+            base_url = getattr(self, "base_url", "")
+            api_key = getattr(self, "api_key", "")
+            if base_url and api_key:
+                with self._account_config_cache_lock:
+                    self._account_config_cache.pop(
+                        (base_url, api_key, bool(getattr(self, "simulated_trading", False))),
+                        None,
+                    )
             refreshed_ps = self._resolve_pos_side(
                 requested_pos_side=pos_side,
                 market_type=mt,

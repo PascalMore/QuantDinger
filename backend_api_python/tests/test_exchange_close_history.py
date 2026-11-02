@@ -10,6 +10,7 @@ from app.services.live_trading.gate import GateUsdtFuturesClient
 from app.services.live_trading.htx import HtxClient
 from app.services.live_trading.okx import OkxClient
 from app.services.alpaca_trading import AlpacaClient
+from app.services.ibkr_trading import IBKRClient
 
 
 OPENED = datetime(2026, 10, 15, 1, 0, tzinfo=timezone.utc)
@@ -97,6 +98,14 @@ class _Alpaca(AlpacaClient):
         self.rows = rows
 
     def get_account_activities(self, **_kwargs):
+        return self.rows
+
+
+class _Ibkr(IBKRClient):
+    def __init__(self, rows):
+        self.rows = rows
+
+    def get_executions(self, **_kwargs):
         return self.rows
 
 
@@ -216,3 +225,32 @@ def test_alpaca_uses_fill_activities_and_preserves_order_id():
     assert snap["amount"] == pytest.approx(2.0)
     assert snap["price"] == pytest.approx(205.5)
     assert snap["exchange_order_id"] == "order-a1"
+
+
+def test_ibkr_uses_account_executions_for_native_protection_close():
+    snap = resolve_exchange_external_close(
+        _Ibkr(
+            [{
+                "execution_id": "ib-fill-1",
+                "order_id": 901,
+                "client_order_id": "qd_7_3",
+                "symbol": "AAPL",
+                "side": "SLD",
+                "quantity": 2,
+                "price": 203.25,
+                "executed_at": datetime(2026, 10, 15, 2, 0, tzinfo=timezone.utc),
+                "commission": 0.35,
+                "commission_ccy": "USD",
+            }]
+        ),
+        symbol="AAPL",
+        side="long",
+        target_qty=2.0,
+        opened_after=OPENED,
+        market_type="spot",
+        is_recorded=lambda _value: False,
+    )
+    assert snap is not None
+    assert snap["price"] == pytest.approx(203.25)
+    assert snap["fee"] == pytest.approx(0.35)
+    assert snap["exchange_order_id"] == "901"

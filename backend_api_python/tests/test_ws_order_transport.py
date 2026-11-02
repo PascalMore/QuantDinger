@@ -241,6 +241,42 @@ def test_order_send_failure_is_unknown_not_safe_fallback():
         conn.request({"id": "1"}, matches=lambda _msg: True)
 
 
+def test_heartbeat_keeps_idle_connection_warm(monkeypatch):
+    real_float_env = transport._float_env
+    monkeypatch.setattr(
+        transport,
+        "_float_env",
+        lambda name, default, minimum, maximum: (
+            0.01
+            if name == "LIVE_TRADING_WS_ORDER_HEARTBEAT_SEC"
+            else real_float_env(name, default, minimum, maximum)
+        ),
+    )
+
+    class WarmSocket:
+        def __init__(self):
+            self.pings = 0
+
+        def ping(self):
+            self.pings += 1
+
+        def close(self):
+            return None
+
+    conn = transport._PersistentRpcSocket(url="wss://example.invalid")
+    sock = WarmSocket()
+    conn._socket = sock
+    conn._start_heartbeat()
+    try:
+        deadline = transport.time.monotonic() + 0.2
+        while sock.pings == 0 and transport.time.monotonic() < deadline:
+            transport.time.sleep(0.01)
+        assert sock.pings >= 1
+        assert conn.last_used > 0
+    finally:
+        conn.close()
+
+
 def test_disabled_ws_order_entry_is_safe_noop(monkeypatch):
     monkeypatch.setenv("LIVE_TRADING_WS_ORDER_ENTRY", "false")
     monkeypatch.setattr(

@@ -14,8 +14,10 @@ from app.data_sources.errors import (
     classify_market_data_failure,
 )
 from app.services.fundamental_data import get_fundamental_data_service
+from app.services.strategy_v2.contract import StrategyV2ContractError
 from app.services.strategy_v2.frequencies import frequency_seconds
 from app.services.strategy_v2.models import StrategyManifest
+from app.services.strategy_v2.readiness import warmup_shortfalls
 from app.services.strategy_v2.service import StrategyV2BacktestService
 
 
@@ -176,8 +178,66 @@ def load_live_frequency_frames(
     return bundles
 
 
+def live_ready_universe_symbols(
+    frequency_frames: dict[str, dict[str, pd.DataFrame]],
+    manifest: StrategyManifest,
+    end_date: datetime,
+    candidates: list[dict[str, object]] | tuple = (),
+) -> tuple[frozenset[str], list[dict[str, object]]]:
+    """Return symbols safe to expose through a live dynamic universe."""
+    loaded_symbols = (
+        set.intersection(*(set(frames) for frames in frequency_frames.values()))
+        if frequency_frames
+        else set()
+    )
+    candidate_symbols = {
+        str(item.get("key") or "")
+        for item in candidates
+        if str(item.get("key") or "")
+    }
+
+    if manifest.universe.kind == "static":
+        missing = sorted(candidate_symbols - loaded_symbols)
+        if missing:
+            raise StrategyV2ContractError(
+                "strategyV2.noMarketData:" + ",".join(missing[:6])
+            )
+
+    shortfalls = warmup_shortfalls(
+        frequency_frames,
+        manifest.warmup_bars,
+        end_date,
+        candidates,
+    )
+    if manifest.universe.kind == "static" and shortfalls:
+        details = ";".join(
+            f"{item['symbol']}@{item['frequency']}="
+            f"{item['count']}/{item['required']}"
+            for item in shortfalls[:6]
+        )
+        raise StrategyV2ContractError(
+            "strategyV2.insufficientWarmupData:" + details
+        )
+
+    excluded = {str(item["symbol"]) for item in shortfalls}
+    ready = frozenset(loaded_symbols - excluded)
+    if not ready:
+        if shortfalls:
+            details = ";".join(
+                f"{item['symbol']}@{item['frequency']}="
+                f"{item['count']}/{item['required']}"
+                for item in shortfalls[:6]
+            )
+            raise StrategyV2ContractError(
+                "strategyV2.insufficientWarmupData:" + details
+            )
+        raise StrategyV2ContractError("strategyV2.noMarketData")
+    return ready, shortfalls
+
+
 __all__ = [
     "completed_bar_token",
+    "live_ready_universe_symbols",
     "live_history_days",
     "load_live_frequency_frames",
     "seconds_until_next_completed_bar",

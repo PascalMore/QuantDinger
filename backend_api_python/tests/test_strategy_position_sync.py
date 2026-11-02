@@ -48,6 +48,40 @@ def test_strategy_allowed_symbols_uses_portfolio_manifest_universe():
     assert strategy_allowed_symbols(sc) == {"AAPL", "MSFT"}
 
 
+def test_strategy_allowed_symbols_uses_owned_dynamic_universe_members(monkeypatch):
+    from app.services.live_trading import records
+
+    class Cursor:
+        def execute(self, _query, params=()):
+            assert params == (42, 42)
+
+        def fetchall(self):
+            return [{"symbol": "AAPL"}, {"symbol": "MSFT"}]
+
+        def close(self):
+            return None
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    @contextmanager
+    def connection():
+        yield Connection()
+
+    monkeypatch.setattr(records, "get_db_connection", connection)
+
+    allowed = strategy_allowed_symbols(
+        {
+            "strategy_id": 42,
+            "symbol": "universe:INDEX:NASDAQ100",
+            "trading_config": {"strategy_manifest": {"universe": {"reference": "INDEX:NASDAQ100"}}},
+        }
+    )
+
+    assert allowed == {"AAPL", "MSFT"}
+
+
 def test_lookup_exchange_side_qty_symbol_aliases():
     exch = {"SOL/USDT": {"long": 1.5, "short": 0.0}}
     assert lookup_exchange_side_qty(exch, "SOLUSDT", "long") == 1.5
@@ -59,20 +93,14 @@ def test_filter_strategy_positions_by_allowed_symbols():
     sc = {"symbol": "", "trading_config": {"symbol": "ETH/USDT"}}
     allowed = strategy_allowed_symbols(sc)
     allowed_upper = {
-        normalize_strategy_symbol(str(s or "")).upper()
-        for s in allowed
-        if normalize_strategy_symbol(str(s or ""))
+        normalize_strategy_symbol(str(s or "")).upper() for s in allowed if normalize_strategy_symbol(str(s or ""))
     }
     rows = [
         {"symbol": "ETH/USDT", "side": "short", "size": 0.41},
         {"symbol": "USDT", "side": "long", "size": 362.0},
         {"symbol": "OKB/USDT", "side": "long", "size": 0.6},
     ]
-    filtered = [
-        r
-        for r in rows
-        if normalize_strategy_symbol(str(r.get("symbol") or "")).upper() in allowed_upper
-    ]
+    filtered = [r for r in rows if normalize_strategy_symbol(str(r.get("symbol") or "")).upper() in allowed_upper]
     assert len(filtered) == 1
     assert filtered[0]["symbol"] == "ETH/USDT"
 
@@ -114,7 +142,7 @@ def test_apply_exchange_snapshot_upserts_allowed_symbol(monkeypatch):
     assert upserts[0]["symbol"] == "ETH/USDT"
     assert upserts[0]["side"] == "long"
     assert upserts[0]["size"] == 0.5
-    assert deletes == [ (42, "ETH/USDT", "short") ]
+    assert deletes == [(42, "ETH/USDT", "short")]
 
 
 def test_apply_exchange_snapshot_skips_unrelated_symbols(monkeypatch):
@@ -156,14 +184,16 @@ def test_mark_live_positions_updates_price_and_unrealized_pnl(monkeypatch):
                 self.rowcount = 1
 
         def fetchall(self):
-            return [{
-                "id": 7,
-                "symbol_canonical": "BTC/USDT",
-                "symbol": "BTC/USDT",
-                "side": "short",
-                "size": 0.0044,
-                "entry_price": 84135.9,
-            }]
+            return [
+                {
+                    "id": 7,
+                    "symbol_canonical": "BTC/USDT",
+                    "symbol": "BTC/USDT",
+                    "side": "short",
+                    "size": 0.0044,
+                    "entry_price": 84135.9,
+                }
+            ]
 
         def close(self):
             return None

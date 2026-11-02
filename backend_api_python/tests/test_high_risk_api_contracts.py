@@ -58,6 +58,8 @@ def test_quick_trade_contract_normalizes_legacy_values():
             "order_type": "LIMIT",
             "amount": "50.5",
             "price": "60000",
+            "reference_price": "60100",
+            "reference_price_at_ms": "1234567890",
             "market_type": "PERP",
             "marginMode": "ISOLATED",
         }
@@ -66,6 +68,8 @@ def test_quick_trade_contract_normalizes_legacy_values():
     assert loaded["side"] == "buy"
     assert loaded["order_type"] == "limit"
     assert loaded["amount"] == 50.5
+    assert loaded["reference_price"] == 60100
+    assert loaded["reference_price_at_ms"] == 1234567890
     assert loaded["market_type"] == "perp"
     assert loaded["marginMode"] == "isolated"
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -12,6 +11,7 @@ from app.services.live_trading.bitget import BitgetMixClient
 from app.services.live_trading.bitget_classic import BitgetClassicMixClient
 from app.services.live_trading.bitget_spot import BitgetSpotClient
 from app.services.live_trading.bitget_spot_classic import BitgetClassicSpotClient
+from app.utils.security_fingerprint import opaque_fingerprint
 
 
 _MODE_CACHE: Dict[str, Tuple[float, str]] = {}
@@ -29,7 +29,7 @@ def _normalize_account_mode(value: Any) -> str:
 
 
 def _cache_key(*, api_key: str, base_url: str, market_type: str, simulated: bool) -> str:
-    digest = hashlib.sha256(str(api_key or "").encode("utf-8")).hexdigest()
+    digest = opaque_fingerprint(api_key, namespace="bitget-account-mode")
     return f"{str(base_url or '').rstrip('/')}:{market_type}:{int(bool(simulated))}:{digest}"
 
 
@@ -171,7 +171,9 @@ class BitgetCompatibleMixClient(_BitgetAutoRouter, BitgetMixClient):
     _ROUTED_METHODS = frozenset(
         {
             "get_funding_payments",
+            "get_contract",
             "get_account_pos_mode",
+            "prepare_ws_order_entry",
             "normalize_base_order_size",
             "get_accounts",
             "get_positions",

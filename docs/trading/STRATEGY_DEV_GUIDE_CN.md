@@ -160,6 +160,8 @@ Content-Type: application/json
 
 系统也会规范化部分别名，例如 <code>600519.XSHG</code> → <code>CNStock:600519.SH</code>、<code>BTCUSDT</code> → <code>BTC/USDT</code>。
 
+券商交易的证券统一使用 <code>Market:Symbol</code> 作为策略层规范身份。<code>USStock</code>、<code>HKStock</code>、<code>CNStock</code>、<code>Forex</code>、<code>Futures</code> 和 <code>MOEX</code> 标的后面不要添加 <code>@NASDAQ</code>、<code>@NYSE</code>、<code>@HKEX</code> 或 <code>@spot</code>。运行时会把券商、上市地点等执行元数据单独保存。只有通过交易所路由的 <code>Crypto</code> 身份才携带 <code>@venue:market_type</code> 后缀。
+
 为避免歧义，生产策略应写完整市场前缀。Crypto 未写市场类型时默认为 spot。只有 swap 可以启用合约杠杆。能够解析市场名称并不代表一定有数据或支持实盘，实盘支持范围见第 18 节。
 
 ### 交易所股票产品：保留完整交易标的

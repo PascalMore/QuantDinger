@@ -123,6 +123,8 @@ class QuickTradeOrderRequestSchema(Schema):
     amount = fields.Float(load_default=0, validate=validate.Range(min=0))
     quantity = fields.Float(load_default=0, validate=validate.Range(min=0))
     price = fields.Float(load_default=0, validate=validate.Range(min=0))
+    reference_price = fields.Float(load_default=0, validate=validate.Range(min=0))
+    reference_price_at_ms = fields.Integer(load_default=0, validate=validate.Range(min=0))
     leverage = fields.Integer(load_default=1, validate=validate.Range(min=1, max=125))
     market_type = fields.String(
         load_default="",

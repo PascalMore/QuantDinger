@@ -23,6 +23,72 @@
 5. **基准比较**：同时看绝对收益和相对基准表现。
 6. **稳健性**：更换时间区间、参数和市场状态，避免只保留最好的一次结果。
 
+### 基准相对指标
+
+有可用基准数据时，Strategy API V2 会返回 `benchmarkRelativeMetrics`。
+计算会先按基准的原生时间点对齐策略权益曲线，再计算周期收益。这样在长区间
+日内回测使用较低频基准时，策略与基准使用相同的收益区间和年化因子，也不会
+因为向前填充价格而制造虚假的跟踪误差。连续市场的数据缺口和股票市场不连续
+交易日会被排除。
+
+结果包括：
+
+- **信息比率**：年化主动收益除以年化跟踪误差。
+- **Beta**：策略相对基准的系统性风险；基准收益方差为零时不可计算。
+- **Jensen Alpha**：相对 CAPM 预期收益的年化风险调整超额收益。Strategy API V2 当前明确使用年化无风险利率 0，并通过 `riskFreeRate` 返回该假设。
+- **Treynor Ratio**：每单位系统性风险对应的年化超额收益。
+- **相关系数和 $R^2$**：策略与基准收益的 Pearson 相关性及其解释比例。任一收益序列恒定时，这两个值保持为空，因为此时相关系数没有数学定义。
+- **上涨/下跌捕获率**：分别在基准上涨和下跌周期内，用策略几何平均收益除以基准几何平均收益；`1.0` 表示 100% 捕获。
+- **捕获比率**：上涨捕获率除以下跌捕获率。
+- **Modigliani–Modigliani ($M^2$) 及 $M^2$ Alpha**：将策略杠杆调整至与基准波动率一致后的年化收益率：$M^2 = R_f + \text{Sharpe}_p \times \sigma_{b,\text{ann}}$，以及相对基准的超额 $M^2_{\text{alpha}} = M^2 - R_{b,\text{ann}}$。
+- **双重 Beta（上涨 Beta 与下跌 Beta）**：
+  - `upBeta`（$\beta^+$）：仅在基准上涨周期（$R_b > 0$）内计算的系统性敏感度。
+  - `downBeta`（$\beta^-$）：仅在基准下跌周期（$R_b < 0$）内计算的系统性敏感度。
+  - `betaSpread`：上涨 Beta 与下跌 Beta 之差（$\beta^+ - \beta^-$）。应结合两个 Beta 的绝对值解释；仅凭正差值不能证明下行防御性。
+  - `dualBetaStatus` 仅在上涨与下跌两个区间都可计算时为 `available`；只有一个区间满足条件时为 `partial`。
+- **胜率（Batting Average）与超额盈亏比**：
+  - `battingAverage`：策略收益跑赢基准的周期占比（$\sum \mathbb{I}(R_{p,t} > R_{b,t}) / T$）。
+  - `outperformancePayoffRatio`：跑赢周期平均超额收益与跑输周期平均超额亏损之比。
+
+为保持兼容，顶层 `status` 继续表示信息比率状态；`betaStatus`、
+`correlationStatus`、`treynorStatus`、`captureStatus`、`mSquaredStatus`、`dualBetaStatus` 和 `battingStatus` 分别说明对应指标是否
+可用。基准收益恒定只会使 Beta 不可用，不会清空仍然可以计算的信息比率。
+读取指标前应先检查相应状态和有效观察数。
+
+### 下行风险与回撤指标
+
+除标准年化波动率与夏普比率（Sharpe Ratio）外，Strategy API V2 回测在主结果字典中提供了下行风险与回撤生命周期指标：
+
+- **索提诺比率（Sortino Ratio）**：年化收益率除以年化下行标准差。与夏普比率不同，索提诺比率仅惩罚低于最低可接受回报（$\text{MAR} = 0.0$）的下行波动，不会将上行盈利波动视为风险。无下行亏损且收益为正时返回 `null` 而非无穷大。
+- **卡玛比率（Calmar Ratio）**：年化收益率与最大回撤幅度的比值（$\text{年化收益率} / |\text{最大回撤}|$）。用于衡量单位极端回撤所带来的复合回报。回撤为零或无有效年化收益时返回 `null`。
+- **下行标准差（Downside Deviation, $\sigma_{\text{down}}$）**：目标半方差，衡量所有观察周期内相对 MAR 的负收益均方根。同时以百分比形式提供年化值 `annualizedDownsideDeviation`。
+- **回撤生命周期与恢复指标**：
+  - `maxDrawdownDurationDays`：整个回测期间资产净值处于前高之下的最长连续水下持续时间（日历天数）。
+  - `maxDrawdownRecoveryTime`：最大回撤低谷后，权益首次恢复至该回撤峰值的时间戳（若在回测结束前未恢复则为空字符串 `""`）。
+  - `maxDrawdownRecoveryDays`：从最大回撤峰值到完全恢复（或至回测结束）所经过的日历天数。
+  - `maxDrawdownRecovered`：布尔值，指示最大回撤阶段是否在回测区间内实现完全恢复。
+  - `recoveryFactor`：净利润总额除以最大回撤实际金额（$\text{净利润} / (\text{最大回撤峰值资金} - \text{最大回撤谷底资金})$）。
+
+### 尾部风险与非正态分布指标
+
+Strategy API V2 还在回测主结果中提供了尾部风险与非正态收益分布指标：
+
+- **在险价值（Value at Risk, VaR）**：95% 与 99% 置信度下的历史最大可能亏损阈值：
+  $$\text{VaR}_\alpha = - \text{Quantile}(R, 1 - \alpha)$$
+  在结果字典中以 `valueAtRisk95` 和 `valueAtRisk99` 返回。同时以 `parametricVaR95` 与 `parametricVaR99` 提供高斯参数化估计（$z_\alpha \cdot \sigma - \mu$）。
+- **条件在险价值（Conditional VaR / 预期亏损 Expected Shortfall）**：损失超过 VaR 门槛时的条件期望损失：
+  $$\text{CVaR}_\alpha = - \mathbb{E}[R \mid R \le - \text{VaR}_\alpha]$$
+  在结果字典中以 `cvar95` 和 `cvar99` 返回。满足次可加性（Coherent Risk Measure），能有效度量超越 VaR 阈值的极端黑天鹅尾部风险。
+- **欧米茄比率（Omega Ratio）**：门槛收益率（默认 0.0）之上的累积概率加权收益与门槛之下的累积概率加权亏损的比值：
+  $$\Omega(L) = \frac{\sum_{t=1}^T \max(R_t - L, 0)}{\sum_{t=1}^T \max(L - R_t, 0)}$$
+  在结果字典中以 `omegaRatio` 返回。与夏普比率不同，欧米茄比率无需假设正态分布，天然涵盖了偏度与峰度等高阶矩信息。无下行亏损时安全返回 `null`。
+- **尾部比率（Tail Ratio）**：右侧 95% 分位数上行收益与左侧 5% 分位数绝对损失的比率：
+  $$\text{Tail Ratio} = \frac{|\text{Quantile}(R, 0.95)|}{|\text{Quantile}(R, 0.05)|}$$
+  在结果字典中以 `tailRatio` 返回。大于 1.0 表示极端上行盈利能力优于极端下行尾部风险。
+- **偏度与超额峰度（Skewness & Kurtosis）**：样本 Fisher-Pearson 偏度（`skewness`）与样本 Fisher 超额峰度（`kurtosis`，正态分布为 0），用于量化收益率分布的不对称性与厚尾肥尾程度。
+
+尾部风险损失值使用原始收益率小数（`tailRiskUnit: "return_fraction"`），例如 `0.025` 表示 `2.5%`。历史 95% 估计至少需要 20 个有效收益观察值，99% 估计至少需要 100 个；样本不足时对应指标返回 `null`，并通过 `valueAtRisk95Status`、`valueAtRisk99Status` 标明可用性。汇总字段 `tailRiskStatus` 取值为 `insufficient_history`、`partial` 或 `available`，`tailRiskObservations` 返回样本数。当指定分位数没有亏损时，VaR 与 CVaR 作为亏损幅度以 0 为下限。
+
 ## 常见误判
 
 - 零成交可能来自数据缺失、预热不足或条件无法满足。

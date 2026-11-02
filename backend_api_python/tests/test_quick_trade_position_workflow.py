@@ -7,9 +7,13 @@ from flask import Flask, g
 from app.routes import quick_trade
 from app.services.live_trading.gate import GateUsdtFuturesClient
 from app.services.quick_trade.position_activity import (
+    binance_position_history,
+    bybit_position_history,
     gate_native_protection_fills,
     gate_position_history,
     gate_protection_orders,
+    htx_position_history,
+    okx_position_history,
     quick_trade_position_history,
     tracked_quick_trade_legs,
     validate_exit_price,
@@ -70,6 +74,29 @@ def test_quick_trade_transport_keeps_shared_pool_warm_on_error(monkeypatch):
     assert releases == [True, True]
 
 
+def test_order_reconciliation_uses_generic_exchange_fill_snapshot():
+    from app.services.quick_trade.order_reconciliation import _exchange_order_updates
+
+    class Client:
+        def wait_for_fill(self, **kwargs):
+            assert kwargs["max_wait_sec"] == 0
+            return {"filled": 0.01, "avg_price": 81047.8, "status": "filled"}
+
+    rows = [{
+        "id": 7,
+        "exchange_order_id": "order-7",
+        "filled_amount": 0,
+        "avg_fill_price": 0,
+        "raw_result": {"_quick_trade": {"requested_base_qty": 0.01}},
+    }]
+
+    updates = _exchange_order_updates(Client(), "BTC/USDT", "swap", rows)
+
+    assert updates[7]["status"] == "filled"
+    assert updates[7]["filled_amount"] == pytest.approx(0.01)
+    assert updates[7]["avg_fill_price"] == pytest.approx(81047.8)
+
+
 def test_exchange_history_preserves_round_trip_net_and_funding(monkeypatch):
     client = object.__new__(GateUsdtFuturesClient)
     rows = [dict(contract="BTC_USDT", side="long", first_open_time=1000, time=2000,
@@ -88,6 +115,142 @@ def test_exchange_history_preserves_round_trip_net_and_funding(monkeypatch):
     result = gate_position_history(client, "BTC/USDT")["positions"][0]
     assert result["entry_price"] == 110
     assert result["exit_price"] == 100
+
+
+def test_okx_position_history_uses_exchange_closed_cycle(monkeypatch):
+    from app.services.live_trading.okx import OkxClient
+
+    client = object.__new__(OkxClient)
+    monkeypatch.setattr(
+        client,
+        "_signed_request",
+        lambda *args, **kwargs: {
+            "code": "0",
+            "data": [{
+                "posId": "position-1",
+                "instId": "BTC-USDT-SWAP",
+                "direction": "long",
+                "openAvgPx": "81047.8",
+                "closeAvgPx": "81030",
+                "closeTotalPos": "0.01",
+                "pnl": "-0.00178",
+                "realizedPnl": "-0.00988389",
+                "fee": "-0.00810389",
+                "fundingFee": "0",
+                "cTime": "1792692255278",
+                "uTime": "1792692268315",
+            }],
+        },
+    )
+
+    result = okx_position_history(client, "BTC/USDT")
+
+    assert result["supported"] is True
+    assert len(result["positions"]) == 1
+    position = result["positions"][0]
+    assert position["entry_price"] == pytest.approx(81047.8)
+    assert position["exit_price"] == pytest.approx(81030)
+    assert position["quantity"] == pytest.approx(0.01)
+    assert position["gross_pnl"] == pytest.approx(-0.00178)
+    assert position["fee"] == pytest.approx(0.00810389)
+    assert position["pnl"] == pytest.approx(-0.00988389)
+
+
+def test_binance_position_history_rebuilds_exchange_fill_cycle(monkeypatch):
+    from app.services.live_trading.binance import BinanceFuturesClient
+
+    client = object.__new__(BinanceFuturesClient)
+    rows = [
+        {
+            "id": 1,
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "positionSide": "LONG",
+            "price": "81000",
+            "qty": "0.01",
+            "realizedPnl": "0",
+            "commission": "0.0081",
+            "commissionAsset": "USDT",
+            "time": 1792692200000,
+        },
+        {
+            "id": 2,
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "positionSide": "LONG",
+            "price": "81100",
+            "qty": "0.01",
+            "realizedPnl": "1",
+            "commission": "0.00811",
+            "commissionAsset": "USDT",
+            "time": 1792692260000,
+        },
+    ]
+    monkeypatch.setattr(client, "get_user_trades", lambda **kwargs: rows)
+
+    result = binance_position_history(client, "BTC/USDT")
+
+    assert result["supported"] is True
+    assert len(result["positions"]) == 1
+    position = result["positions"][0]
+    assert position["side"] == "long"
+    assert position["entry_price"] == pytest.approx(81000)
+    assert position["exit_price"] == pytest.approx(81100)
+    assert position["quantity"] == pytest.approx(0.01)
+    assert position["gross_pnl"] == pytest.approx(1)
+    assert position["fee"] == pytest.approx(0.01621)
+    assert position["pnl"] == pytest.approx(0.98379)
+
+
+def test_binance_trade_history_uses_exchange_fills_and_infers_short_close(monkeypatch):
+    from app.services.live_trading.binance import BinanceFuturesClient
+    from app.services.quick_trade.position_activity import binance_trade_history
+
+    client = object.__new__(BinanceFuturesClient)
+    rows = [
+        {
+            "id": 10,
+            "orderId": 100,
+            "symbol": "SOLUSDT",
+            "side": "SELL",
+            "positionSide": "BOTH",
+            "price": "104.03",
+            "qty": "4.8",
+            "realizedPnl": "0",
+            "commission": "0.10",
+            "commissionAsset": "USDT",
+            "time": 1792692200000,
+        },
+        {
+            "id": 11,
+            "orderId": 101,
+            "symbol": "SOLUSDT",
+            "side": "BUY",
+            "positionSide": "BOTH",
+            "price": "103.92",
+            "qty": "4.8",
+            "realizedPnl": "0.528",
+            "commission": "0.10",
+            "commissionAsset": "USDT",
+            "time": 1792692260000,
+        },
+    ]
+    monkeypatch.setattr(client, "get_user_trades", lambda **kwargs: rows)
+
+    result = binance_trade_history(client, "SOL/USDT", market_type="swap")
+
+    assert result["supported"] is True
+    assert len(result["trades"]) == 2
+    close_fill = result["trades"][0]
+    assert close_fill["source"] == "exchange"
+    assert close_fill["order_type"] == "fill"
+    assert close_fill["is_close"] is True
+    assert close_fill["close_side"] == "short"
+    assert close_fill["realized_pnl"] == pytest.approx(0.528)
+    assert close_fill["filled_amount"] == pytest.approx(4.8)
+    assert close_fill["avg_fill_price"] == pytest.approx(103.92)
+    assert close_fill["commission_quote"] == pytest.approx(0.10)
+    assert result["trades"][1]["realized_pnl"] is None
 
 
 def test_gate_native_protection_fills_groups_partial_fills_and_ignores_regular_orders(monkeypatch):
@@ -187,6 +350,49 @@ def test_reconciled_position_history_pairs_entry_and_exchange_close():
     assert position["gross_pnl"] == pytest.approx(20)
     assert position["fee"] == pytest.approx(0.5)
     assert position["pnl"] == pytest.approx(19.5)
+
+
+def test_bitget_position_history_uses_exchange_closed_cycle(monkeypatch):
+    from app.services.live_trading.bitget_classic import BitgetClassicMixClient
+    from app.services.quick_trade.position_activity import bitget_position_history
+
+    client = object.__new__(BitgetClassicMixClient)
+    monkeypatch.setattr(
+        client,
+        "_signed_request",
+        lambda *args, **kwargs: {
+            "data": {
+                "list": [{
+                    "positionId": "position-1",
+                    "symbol": "BTCUSDT",
+                    "holdSide": "long",
+                    "openAvgPrice": "81270",
+                    "closeAvgPrice": "81256.6",
+                    "openTotalPos": "0.0001",
+                    "closeTotalPos": "0.0001",
+                    "pnl": "-0.00134",
+                    "netProfit": "-0.00784079",
+                    "totalFunding": "0",
+                    "openFee": "-0.0016254",
+                    "closeFee": "-0.00487539",
+                    "ctime": "1792691557318",
+                    "utime": "1792691574349",
+                }]
+            }
+        },
+    )
+
+    result = bitget_position_history(client, "BTC/USDT")
+
+    assert result["supported"] is True
+    assert len(result["positions"]) == 1
+    position = result["positions"][0]
+    assert position["entry_price"] == pytest.approx(81270)
+    assert position["exit_price"] == pytest.approx(81256.6)
+    assert position["quantity"] == pytest.approx(0.0001)
+    assert position["gross_pnl"] == pytest.approx(-0.00134)
+    assert position["fee"] == pytest.approx(0.00650079)
+    assert position["pnl"] == pytest.approx(-0.00784079)
 
 
 @pytest.mark.parametrize("side,kind,valid,invalid", [
@@ -334,6 +540,101 @@ def test_matching_position_size_ignores_other_symbols_and_sides():
         symbol="SOL/USDT",
         position_side="short",
     ) == pytest.approx(1.9)
+
+
+def test_bybit_position_history_uses_exchange_closed_pnl(monkeypatch):
+    from app.services.live_trading.bybit import BybitClient
+
+    client = object.__new__(BybitClient)
+    client.category = "linear"
+    monkeypatch.setattr(
+        client,
+        "_signed_request",
+        lambda *args, **kwargs: {
+            "result": {
+                "list": [{
+                    "symbol": "BTCUSDT",
+                    "orderId": "close-1",
+                    "side": "Sell",
+                    "closedSize": "0.01",
+                    "avgEntryPrice": "81000",
+                    "avgExitPrice": "81100",
+                    "closedPnl": "0.6",
+                    "openFee": "0.2",
+                    "closeFee": "0.2",
+                    "createdTime": "1792691000000",
+                    "updatedTime": "1792691001000",
+                }]
+            }
+        },
+    )
+
+    position = bybit_position_history(client, "BTC/USDT")["positions"][0]
+
+    assert position["side"] == "long"
+    assert position["quantity"] == pytest.approx(0.01)
+    assert position["entry_price"] == pytest.approx(81000)
+    assert position["exit_price"] == pytest.approx(81100)
+    assert position["fee"] == pytest.approx(0.4)
+    assert position["pnl"] == pytest.approx(0.6)
+    assert position["gross_pnl"] == pytest.approx(1.0)
+
+
+def test_htx_position_history_rebuilds_exchange_match_cycle(monkeypatch):
+    from app.services.live_trading.htx import HtxClient
+    from app.services.quick_trade import position_activity
+
+    client = object.__new__(HtxClient)
+    client.market_type = "swap"
+    client.margin_mode = "cross"
+    monkeypatch.setattr(position_activity, "contract_multiplier", lambda *args: 0.01)
+    monkeypatch.setattr(
+        client,
+        "_swap_private_request_raw",
+        lambda *args, **kwargs: {
+            "data": {
+                "trades": [
+                    {
+                        "contract_code": "BTC-USDT",
+                        "trade_id": "open-1",
+                        "direction": "buy",
+                        "offset": "open",
+                        "trade_volume": "10",
+                        "trade_price": "81000",
+                        "trade_fee": "-0.2",
+                        "created_at": "1792691000000",
+                    },
+                    {
+                        "contract_code": "BTC-USDT",
+                        "trade_id": "close-1",
+                        "direction": "sell",
+                        "offset": "close",
+                        "trade_volume": "10",
+                        "trade_price": "81100",
+                        "trade_fee": "-0.2",
+                        "real_profit": "10",
+                        "created_at": "1792691001000",
+                    },
+                ]
+            }
+        },
+    )
+
+    position = htx_position_history(client, "BTC/USDT")["positions"][0]
+
+    assert position["side"] == "long"
+    assert position["quantity"] == pytest.approx(0.1)
+    assert position["entry_price"] == pytest.approx(81000)
+    assert position["exit_price"] == pytest.approx(81100)
+    assert position["fee"] == pytest.approx(0.4)
+    assert position["gross_pnl"] == pytest.approx(10)
+    assert position["pnl"] == pytest.approx(9.6)
+
+
+def test_order_reconciliation_covers_every_crypto_quick_trade_exchange():
+    from app.services.quick_trade.order_reconciliation import _RECONCILABLE_EXCHANGES
+
+    assert {"binance", "bitget", "bybit", "gate", "htx", "okx"} <= _RECONCILABLE_EXCHANGES
 
 
 def test_cancel_protection_cannot_cancel_another_symbol_or_side(monkeypatch):

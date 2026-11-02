@@ -135,11 +135,15 @@ The web UI source lives in the separate private **QuantDinger-Vue** repo, which 
 ### Backend (Python)
 
 ```bash
-cp .env.example .env   # Windows: copy .env.example .env
+python scripts/bootstrap_env.py
 cd backend_api_python
 pip install -r requirements.txt
 python run.py
 ```
+
+`bootstrap_env.py` creates the project-root `.env`, generates missing local
+credentials, and preserves existing values. Set `DATABASE_URL` explicitly when
+the backend runs directly on the host instead of through Docker Compose.
 
 ### Frontend
 
@@ -182,16 +186,36 @@ Please include:
 
 Keep PRs focused and reviewable.
 
+### Developer Certificate of Origin
+
+Every commit must certify the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/) by
+including a `Signed-off-by` trailer. Add it automatically with:
+
+```bash
+git commit -s
+```
+
+The sign-off states that you created the contribution or otherwise have the
+legal right to submit it under this project's Apache-2.0 license. Pull requests
+with an unsigned commit fail the DCO check.
+
 ---
 
 ## 🧪 Testing & Verification
 
-We do not enforce a single test command yet. Please at least:
+Major functionality and security-sensitive fixes must add or update automated
+tests. Bug fixes should include a regression test unless the pull request
+documents why automated reproduction is not practical.
 
-- **Backend**: run the API locally and verify affected endpoints
-- **Frontend**: run the dev server and verify affected pages/components
+Run the checks relevant to the changed component and record them in the pull
+request. The canonical commands, CI coverage, and release-gate policy are in
+[docs/getting-started/TESTING.md](docs/getting-started/TESTING.md).
 
-Bug fixes should include a minimal regression test when practical.
+Python contributions must pass Ruff and follow the existing formatting and
+naming conventions. Keep public interfaces backward compatible or document the
+approved migration. Never merge a change with a known exploitable medium-or-
+higher security finding.
 
 ---
 
@@ -231,7 +255,15 @@ For security reports, contact the maintainer via the email in README.md and incl
 ## 📜 License
 
 By contributing, you agree that your contributions will be licensed
-under the project's license (see LICENSE).
+under the project's license (see LICENSE) and certify each commit under the
+Developer Certificate of Origin as described above.
+
+Dependency additions, vendored code, copied examples, generated assets, and
+changes to distribution behavior must also follow the
+[open source license compliance procedure](docs/compliance/LICENSE_COMPLIANCE_PROCEDURE.md).
+Include the component source, version, license, intended use, and required
+notices in the pull request. Do not submit material that you do not have the
+right to contribute.
 
 ---
 

@@ -1,10 +1,12 @@
 <div align="center">
   <a href="https://github.com/OpenByteInc/QuantDinger">
-    <img src="docs/screenshots/logo.png" alt="QuantDinger logo" width="420">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/logo-dark.png">
+      <img src="docs/screenshots/logo.png" alt="QuantDinger logo" width="420">
+    </picture>
   </a>
 
-  <h1>QuantDinger</h1>
-  <p><strong>开源 AI 交易操作系统</strong></p>
+  <p><strong>QuantDinger - 开源 AI 量化研究平台</strong></p>
   <p>在一套可自行托管的系统中，将交易想法转化为 Python 策略、回测、模拟交易、实盘执行与监控。</p>
   <p><strong>QuantDinger 是 Open Byte Inc. 旗下产品。</strong></p>
   <p><em>AI 投研 → 策略代码 → 回测 → 模拟/实盘执行 → 监控</em></p>
@@ -14,6 +16,26 @@
     ·
     <a href="README_CN.md"><strong>简体中文</strong></a>
     ·
+    <a href="README_TW.md"><strong>繁體中文</strong></a>
+    ·
+    <a href="README_JA.md"><strong>日本語</strong></a>
+    ·
+    <a href="README_KO.md"><strong>한국어</strong></a>
+    ·
+    <a href="README_DE.md"><strong>Deutsch</strong></a>
+    ·
+    <a href="README_FR.md"><strong>Français</strong></a>
+    ·
+    <a href="README_RU.md"><strong>Русский</strong></a>
+    ·
+    <a href="README_AR.md"><strong>العربية</strong></a>
+    ·
+    <a href="README_TH.md"><strong>ไทย</strong></a>
+    ·
+    <a href="README_VI.md"><strong>Tiếng Việt</strong></a>
+  </p>
+
+  <p>
     <a href="docs/api/README.md"><strong>API 文档</strong></a>
     ·
     <a href="docs/agent/README.md"><strong>AI Agent 与 MCP</strong></a>
@@ -23,6 +45,8 @@
     <a href="https://ai.quantdinger.com"><strong>在线应用</strong></a>
     ·
     <a href="https://www.quantdinger.com"><strong>官方网站</strong></a>
+    ·
+    <a href="https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari"><strong>AWS Marketplace 一键部署</strong></a>
     ·
     <a href="#观看-quantdinger-实际运行"><strong>视频演示</strong></a>
     ·
@@ -38,6 +62,10 @@
 
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square" alt="Apache 2.0"></a>
+    <a href="https://sonarcloud.io/summary/new_code?id=OpenByteInc_QuantDinger"><img src="https://sonarcloud.io/api/project_badges/measure?project=OpenByteInc_QuantDinger&metric=alert_status" alt="SonarQube Cloud Quality Gate"></a>
+    <a href="https://api.reuse.software/info/github.com/OpenByteInc/QuantDinger"><img src="https://api.reuse.software/badge/github.com/OpenByteInc/QuantDinger" alt="REUSE status"></a>
+    <a href="docs/compliance/OPENCHAIN_ISO_5230_SELF_ASSESSMENT.md" title="Open Byte Inc. OpenChain ISO/IEC 5230 符合性项目"><img src="https://img.shields.io/badge/OpenChain_ISO%2FIEC_5230-conformant-0B6B53?style=flat-square" alt="OpenChain ISO/IEC 5230 conformant"></a>
+    <a href="docs/compliance/OPENCHAIN_ISO_18974_SELF_ASSESSMENT.md" title="Open Byte Inc. OpenChain ISO/IEC 18974 符合性项目"><img src="https://img.shields.io/badge/OpenChain_ISO%2FIEC_18974-conformant-0B6B53?style=flat-square" alt="OpenChain ISO/IEC 18974 conformant"></a>
     <img src="docs/badges/python-3.12.svg" alt="Python 3.12">
     <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL 18">
     <img src="https://img.shields.io/badge/Redis-8-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis 8">
@@ -51,19 +79,34 @@
     <a href="https://github.com/orgs/OpenByteInc/projects/1/views/4"><img src="https://img.shields.io/github/issues/OpenByteInc/QuantDinger/ready%20for%20contributors?style=flat-square&label=Ready%20tasks&color=0E8A16" alt="Tasks ready for contributors"></a>
   </p>
 
+  <p><sub>生态计划成员</sub></p>
+  <p>
+    <a href="https://www.nvidia.com/en-us/startups/" title="Open Byte Inc. 已加入 NVIDIA Inception">
+      <img src="docs/badges/nvidia-inception-member.png" alt="NVIDIA Inception 会员徽章" width="210">
+    </a>
+  </p>
+  <p><sub>Open Byte Inc. 已加入 NVIDIA Inception。</sub></p>
+
   <p><sub>赞助支持</sub></p>
   <p>
     <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=quantdinger" title="Atlas Cloud — AI inference sponsor">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="https://www.atlascloud.ai/logo-white.svg">
-        <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="142">
+        <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="134" align="middle">
       </picture>
     </a>
     &nbsp;&nbsp;&nbsp;&nbsp;
-    <a href="https://aws.amazon.com/" title="Amazon Web Services — cloud infrastructure sponsor">
+    <a href="https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari" title="通过 AWS Marketplace 部署 QuantDinger">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="https://a0.awsstatic.com/libra-css/images/logos/aws_smile-header-desktop-en-white_59x35.png">
-        <img src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg" alt="Amazon Web Services" width="70">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg" alt="Amazon Web Services" width="54" align="middle">
+      </picture>
+    </a>
+    &nbsp;&nbsp;&nbsp;&nbsp;
+    <a href="https://openai.com/" title="OpenAI — 开源开发工具支持">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/badges/openai-wordmark-white.svg">
+        <img src="docs/badges/openai-wordmark-black.svg" alt="OpenAI" width="150" align="middle">
       </picture>
     </a>
   </p>
@@ -78,7 +121,11 @@
 ## 观看 QuantDinger 实际运行
 
 <p align="center">
-  <img src="docs/screenshots/quantdinger-v5-2x.gif" alt="QuantDinger 产品演示，2 倍速" width="800">
+  <a href="https://youtu.be/y9EiCZSaIt0">
+    <img src="docs/screenshots/quantdinger-youtube-overview.png" alt="在 YouTube 观看最新 QuantDinger 介绍视频" width="800">
+  </a>
+  <br>
+  <strong><a href="https://youtu.be/y9EiCZSaIt0">▶ 在 YouTube 观看最新 QuantDinger 产品介绍</a></strong>
 </p>
 
 ## QuantDinger 是什么
@@ -99,6 +146,10 @@ QuantDinger 是面向独立交易者、Python 策略开发者和小型团队的*
 
 ### 策略进化与仅通知虚拟账户
 
+- **因子实验室**：一次加载同一个时点化标的池面板，批量评估最多 40 个技术、基本面、
+  TA-Lib 或 Qlib 因子；使用按时间切分的样本外验证、IC 保持率、Benjamini-Hochberg
+  错误发现率控制、成本感知评分、因子生命周期分类和跨因子 IC 相关矩阵。Web 界面、
+  Human API、Agent Gateway 与 MCP 均可调用同一套流程。
 - **策略进化**：对策略声明的可调参数执行随机、网格或 TPE 搜索，按实际 K 线数量进行
   walk-forward 验证，并保留最终盲测区间。研究任务异步运行且按策略保存历史，支持自动剪枝、
   综合评分、PBO、Deflated Sharpe、区块自助法蒙特卡洛和交易成本压力测试。结果用于比较参数
@@ -198,6 +249,22 @@ flowchart TB
 
 ## 快速开始
 
+不确定该选择 Windows、Linux/macOS、云服务器、SaaS 还是移动端？先阅读
+[安装与部署总览](docs/getting-started/INSTALLATION_CN.md)。每条路径都包含安装、验证、升级、
+部署后设置和常见问题。
+
+### 最快的云端部署方式：AWS Marketplace
+
+<p align="center">
+  <a href="https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari"><img src="https://img.shields.io/badge/AWS%20Marketplace-%E9%83%A8%E7%BD%B2%20QuantDinger-FF9900?style=for-the-badge&logo=amazonaws&logoColor=white" alt="通过 AWS Marketplace 部署 QuantDinger"></a>
+</p>
+
+可从公开的 [AWS Marketplace 产品页](https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari)
+快速启动免费的 QuantDinger 软件。Marketplace 交付方案通过 CloudFormation 创建单机容器服务栈
+及其所需的 AWS 基础设施。QuantDinger 软件本身不收费，但用户仍需承担正常的 AWS 基础设施费用。
+首次登录、备份、升级、回滚和费用说明请参阅
+[AWS Marketplace 一键部署指南](docs/deployment/AWS_MARKETPLACE_DEPLOYMENT_CN.md)。
+
 ### 方案 A：预构建镜像
 
 前置要求：安装支持 Compose v2 的 Docker。无需安装 Node.js 或本地 Python 环境。
@@ -258,18 +325,32 @@ docker compose exec -u 10001:10001 -T backend \
 ```bash
 git clone https://github.com/OpenByteInc/QuantDinger.git
 cd QuantDinger
-cp .env.example .env
+python scripts/bootstrap_env.py
 ```
 
-首次启动前，请替换统一环境文件中的示例值：
+首次启动前，请检查统一环境文件。初始化命令已经自动生成 PostgreSQL、会话签名和凭据加密密钥；
+你只需设置管理员凭据，并检查生产环境专用的集成配置：
 
 | 文件 | 生产环境必填项 |
 | --- | --- |
-| `.env` | `SECRET_KEY`、`CREDENTIAL_ENCRYPTION_KEY`、管理员、PostgreSQL、Redis 和 Grafana 凭据 |
+| `.env` | 管理员凭据；可选的 Redis、Grafana 凭据；部署域名及外部集成 |
 
-更新代码后，`docker compose up` 会先执行一次性的 `env-sync` 服务，再启动数据库迁移与
-Kafka 初始化。它会补充新字段，从旧后端环境文件导入根 `.env` 中缺少的值，保留已有值和
-注释，并且只在文件确有变化时创建带时间戳的备份。下面的命令仍可用于手动预检或维护：
+拉取更新后，必须先初始化统一环境文件，再执行任何 Compose 命令。从曾经依赖内置
+PostgreSQL 默认密码的旧版本升级时，这是一项必要的一次性迁移：
+
+```bash
+git pull --ff-only
+python3 scripts/bootstrap_env.py
+docker compose up -d --build
+```
+
+初始化脚本会保留已有凭据，并可从旧 `DATABASE_URL` 或现有数据库容器恢复原 PostgreSQL
+密码。如果检测到已有数据卷但无法恢复密码，它会停止而不是让数据库失联。不要随意填写
+替代密码，也不要删除数据卷。
+
+初始化完成后，Compose 会先执行一次性的 `env-sync` 服务，再启动数据库迁移与 Kafka
+初始化。它会补充新字段，从旧后端环境文件导入根 `.env` 中缺少的值，保留已有值和注释，
+并且只在文件确有变化时创建带时间戳的备份。下面的命令仍可用于手动预检或维护：
 
 ```bash
 python scripts/sync_env.py --env-file .env --template .env.example --backup
@@ -278,7 +359,8 @@ python scripts/sync_env.py --env-file .env --template .env.example --backup
 手动执行旧版本首次迁移时，再增加 `--legacy backend_api_python/.env`（源码部署）或
 `--legacy backend.env`（旧 GHCR 部署）。旧文件不会被删除。
 
-使用以下命令生成相互独立的密钥：
+初始化命令会创建 `.env`，在升级时保留已有配置，并分别生成 PostgreSQL、会话签名和凭据加密密钥。
+如需手动生成额外的独立密钥，可使用：
 
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
@@ -293,9 +375,22 @@ docker compose ps
 
 基础服务栈不会启动 Prometheus、Grafana 或 Alertmanager，从而保持默认开源安装的轻量化。
 
-有关详细安装路径、Windows 注意事项、中国镜像设置和 PostgreSQL 迁移指导，请参阅
-[安装故障排查](docs/deployment/INSTALL_TROUBLESHOOTING.md)和
-[云部署指南](docs/deployment/CLOUD_DEPLOYMENT_EN.md)。
+有关完整平台步骤，请参阅 [Windows 安装](docs/deployment/WINDOWS_INSTALLATION_CN.md)、
+[Linux 与 macOS 安装](docs/deployment/LINUX_MACOS_INSTALLATION_CN.md)、
+[云部署指南](docs/deployment/CLOUD_DEPLOYMENT_CN.md)、
+[SaaS 部署](docs/deployment/SAAS_DEPLOYMENT_CN.md)和
+[移动端部署](docs/deployment/MOBILE_CLIENT_DEPLOYMENT_CN.md)。安装成功后继续完成
+[部署后首次设置](docs/getting-started/POST_INSTALL_SETUP_CN.md)；异常处理见
+[安装 FAQ](docs/deployment/INSTALLATION_FAQ_CN.md)和
+[安装故障排查](docs/deployment/INSTALL_TROUBLESHOOTING_CN.md)。
+
+首次登录后可直接按[30 分钟上手](docs/getting-started/QUICKSTART_30_MINUTES_CN.md)完成基础配置、AI
+接入、首份研究和回测。生产管理员还应阅读[配置参考](docs/deployment/CONFIGURATION_REFERENCE_CN.md)、
+[备份、恢复与迁移](docs/deployment/BACKUP_RESTORE_MIGRATION_CN.md)以及
+[升级与回滚](docs/deployment/UPGRADE_ROLLBACK_CN.md)。
+
+如需使用免费的 AWS Marketplace 单机交付方案，以及查看首次部署、升级、备份、回滚和费用说明，
+请参阅 [AWS Marketplace 一键部署指南](docs/deployment/AWS_MARKETPLACE_DEPLOYMENT_CN.md)。
 
 ## 生产环境部署
 
@@ -621,6 +716,13 @@ Web 与移动端仓库分别发布自己的 GHCR 镜像。只有从源码构建�
 
 | 主题 | 文档 |
 | --- | --- |
+| 安装与平台选择 | [安装总览](docs/getting-started/INSTALLATION_CN.md) |
+| 30 分钟上手 | [首次完整流程](docs/getting-started/QUICKSTART_30_MINUTES_CN.md) |
+| 系统配置 | [配置参考](docs/deployment/CONFIGURATION_REFERENCE_CN.md) |
+| 外部服务 | [券商、数据源与 AI 接入](docs/deployment/INTEGRATION_GUIDE_CN.md) |
+| 备份与迁移 | [备份、恢复与迁移](docs/deployment/BACKUP_RESTORE_MIGRATION_CN.md) |
+| 升级与回滚 | [升级与回滚](docs/deployment/UPGRADE_ROLLBACK_CN.md) |
+| 故障诊断 | [错误知识库](docs/deployment/ERROR_KNOWLEDGE_BASE_CN.md) |
 | 贡献者架构 | [系统架构](docs/architecture/ARCHITECTURE.md) |
 | 模块所有权 | [模块边界](docs/architecture/MODULE_BOUNDARIES.md) |
 | 进程与任务所有权 | [进程职责](docs/architecture/PROCESS_ROLES_AND_TASKS.md) |
@@ -632,7 +734,9 @@ Web 与移动端仓库分别发布自己的 GHCR 镜像。只有从源码构建�
 | 指标开发 | [指标指南](docs/trading/INDICATOR_DEV_GUIDE.md) |
 | MCP 与 Agent | [Agent 文档](docs/agent/README.md) |
 | 云部署 | [云部署](docs/deployment/CLOUD_DEPLOYMENT_EN.md) |
+| AWS Marketplace | [一键部署与升级](docs/deployment/AWS_MARKETPLACE_DEPLOYMENT_CN.md) |
 | 安装问题 | [故障排查](docs/deployment/INSTALL_TROUBLESHOOTING.md) |
+| 文档维护 | [文档维护规范](docs/architecture/DOCUMENTATION_MAINTENANCE_CN.md) |
 
 ## 参与贡献
 
@@ -645,6 +749,9 @@ Web 与移动端仓库分别发布自己的 GHCR 镜像。只有从源码构建�
 ## 许可证与商业条款
 
 - 后端源码采用 [Apache License 2.0](LICENSE) 许可证。
+- 本仓库通过 REUSE 自动检查；Open Byte Inc. 已完成
+  [OpenChain ISO/IEC 5230 与 ISO/IEC 18974 在线自我认证，并维护符合性证据](docs/compliance/README.md)。
+  认证对象是限定范围内的管理流程，不是对 QuantDinger 软件的第三方产品认证。
 - QuantDinger 是 **Open Byte Inc** 旗下产品。名称、Logo、产品标识和商业许可与代码许可证分开管理。
 - Web 前端源码发布在
   [QuantDinger Frontend](https://github.com/OpenByteInc/QuantDinger-Vue)，采用其独立的源码可用许可证。
@@ -694,11 +801,11 @@ QuantDinger 的持续开发和开源社区得到以下机构支持：
 
 <table>
   <tr>
-    <td align="center" width="50%">
+    <td align="center" width="33.33%">
       <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=quantdinger">
         <picture>
           <source media="(prefers-color-scheme: dark)" srcset="https://www.atlascloud.ai/logo-white.svg">
-          <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="190">
+          <img src="https://www.atlascloud.ai/logo.svg" alt="Atlas Cloud" width="176" align="middle">
         </picture>
       </a>
       <br><br>
@@ -706,11 +813,11 @@ QuantDinger 的持续开发和开源社区得到以下机构支持：
       <br>
       <sub>AI 推理赞助商</sub>
     </td>
-    <td align="center" width="50%">
-      <a href="https://aws.amazon.com/">
+    <td align="center" width="33.33%">
+      <a href="https://aws.amazon.com/marketplace/pp/prodview-ywy4zb5wnsari">
         <picture>
           <source media="(prefers-color-scheme: dark)" srcset="https://a0.awsstatic.com/libra-css/images/logos/aws_smile-header-desktop-en-white_59x35.png">
-          <img src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg" alt="Amazon Web Services" width="100">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg" alt="Amazon Web Services" width="72" align="middle">
         </picture>
       </a>
       <br><br>
@@ -718,12 +825,26 @@ QuantDinger 的持续开发和开源社区得到以下机构支持：
       <br>
       <sub>云基础设施赞助商</sub>
     </td>
+    <td align="center" width="33.33%">
+      <a href="https://openai.com/">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="docs/badges/openai-wordmark-white.svg">
+          <img src="docs/badges/openai-wordmark-black.svg" alt="OpenAI" width="220" align="middle">
+        </picture>
+      </a>
+      <br><br>
+      <strong>OpenAI</strong>
+      <br>
+      <sub>开源开发工具赞助商</sub>
+    </td>
   </tr>
 </table>
 
 感谢 [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=quantdinger)
-支持 AI 模型推理，也感谢 [Amazon Web Services](https://aws.amazon.com/) 提供云基础设施支持，
-帮助 QuantDinger 服务社区。
+支持 AI 模型推理，感谢 [Amazon Web Services](https://aws.amazon.com/) 提供云基础设施支持，
+也感谢 [OpenAI](https://openai.com/) 提供开源开发工具支持，帮助 QuantDinger 服务社区。
+
+<sub>OpenAI 与 OpenAI Logo 是 OpenAI 的商标。此处展示用于说明项目与工具支持，不代表 OpenAI 对 QuantDinger 的产品认证或背书。</sub>
 
 ## 致谢
 

@@ -211,11 +211,25 @@ def find_live_strategy_conflict(
         if not other:
             continue
         other_key = strategy_live_lock_key(other, user_id)
-        if not other_key or other_key[:-1] != key[:-1]:
+        if not other_key:
+            continue
+        same_leg = other_key[:-1] == key[:-1]
+        same_account_market = other_key[:-2] == key[:-2]
+        ibkr_dynamic_portfolio = (
+            same_account_market
+            and key[-4] == "ibkr"
+            and key[-3] in {"spot", "stock", "usstock"}
+            and any(
+                str(symbol or "").lower().startswith(("basket:", "universe:"))
+                for symbol in (key[-2], other_key[-2])
+            )
+        )
+        if not same_leg and not ibkr_dynamic_portfolio:
             continue
         other_mode = resolve_strategy_direction_mode(other)
         if (
-            not allow_opposite_leg
+            ibkr_dynamic_portfolio
+            or not allow_opposite_leg
             or bool(
                 direction_mode_owned_legs(requested_mode)
                 & direction_mode_owned_legs(other_mode)

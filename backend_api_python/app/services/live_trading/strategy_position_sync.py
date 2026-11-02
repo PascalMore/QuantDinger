@@ -63,7 +63,7 @@ def apply_exchange_snapshot_to_strategy_ledger(
     if sid <= 0:
         return 0
 
-    allowed = strategy_allowed_symbols(strategy_config or {})
+    allowed = strategy_allowed_symbols(strategy_config or {}, strategy_id=sid)
     if not allowed:
         return 0
 

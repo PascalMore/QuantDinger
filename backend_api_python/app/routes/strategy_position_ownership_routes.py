@@ -73,7 +73,10 @@ def _ownership_context(strategy_id: int, user_id: int) -> Tuple[Dict[str, Any], 
     )
     if str(resolved.get("exchange_id") or "").lower() == "alpaca":
         market_type = "spot"
-    allowed = strategy_allowed_symbols({"symbol": strategy.get("symbol"), "trading_config": trading})
+    allowed = strategy_allowed_symbols(
+        {"symbol": strategy.get("symbol"), "trading_config": trading},
+        strategy_id=int(strategy_id),
+    )
     return strategy, resolved, credential_id, market_type, allowed
 
 

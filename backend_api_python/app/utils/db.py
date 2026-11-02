@@ -65,15 +65,18 @@ def init_database(*, strict_migrations: bool = False):
     Two deployment styles have to land here without diverging:
 
     1. **Docker compose** — the Postgres container's entrypoint runs
-       ``/docker-entrypoint-initdb.d/init.sql`` on first boot. Our re-apply on
-       every backend start is a no-op because ``init.sql`` is fully idempotent
-       (``CREATE TABLE IF NOT EXISTS`` everywhere).
+       ``/docker-entrypoint-initdb.d/init.sql`` on first boot. The backend then
+       applies the canonical schema and registered upgrade/seed components
+       through ``qd_bootstrap_migrations`` on every start.
     2. **Bare-metal / Windows local PG** — nothing runs ``init.sql`` for the
        operator. Previously they had to manually ``psql -f migrations/init.sql``
        before starting the backend, otherwise every worker exploded with
        ``relation does not exist``. We now apply it ourselves.
 
-    After the schema apply we ping every critical table with ``SELECT 1
+    Bulk catalogues stay in separate registered components so existing Docker
+    volumes receive them without inflating the canonical schema script.
+
+    After the bootstrap we ping every critical table with ``SELECT 1
     LIMIT 0``. This catches the *other* common deployment pitfall: the schema
     was created by ``postgres`` (superuser) but ``DATABASE_URL`` points to a
     non-owner user that lacks ``SELECT``. Without the probe the backend looks
@@ -313,6 +316,30 @@ def _apply_init_sql(logger, *, strict: bool = False):
                 logger,
                 name="signal-virtual-limit-orders-20260926",
                 path=Path(__file__).resolve().parent.parent.parent / "migrations" / "20260926_signal_virtual_limit_orders.sql",
+            )
+            _apply_migration_component(
+                conn,
+                logger,
+                name="position-alert-ownership-20261023",
+                path=Path(__file__).resolve().parent.parent.parent / "migrations" / "20261023_position_alert_ownership.sql",
+            )
+            _apply_migration_component(
+                conn,
+                logger,
+                name="public-universe-expansion-20261024",
+                path=Path(__file__).resolve().parent.parent.parent / "migrations" / "20261024_public_universe_expansion.sql",
+            )
+            _apply_migration_component(
+                conn,
+                logger,
+                name="default-cn-hk-universe-members-20261025",
+                path=Path(__file__).resolve().parent.parent.parent / "migrations" / "20261025_default_cn_hk_universe_members.sql",
+            )
+            _apply_migration_component(
+                conn,
+                logger,
+                name="default-global-universe-members-20261025",
+                path=Path(__file__).resolve().parent.parent.parent / "migrations" / "20261025_default_global_universe_members.sql",
             )
             _apply_migration_component(
                 conn,

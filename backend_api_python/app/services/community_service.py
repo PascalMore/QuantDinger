@@ -21,6 +21,7 @@ from app.services.strategy_marketplace_contract import (
     compatibility_for_target,
     derive_marketplace_contract,
 )
+from app.services.strategy_v2.instruments import instrument_key_from_metadata
 
 logger = get_logger(__name__)
 
@@ -74,16 +75,9 @@ def _marketplace_contract_payload(
     for item in instruments:
         if not isinstance(item, dict):
             continue
-        market = str(item.get('market') or '').strip()
-        symbol = str(item.get('symbol') or item.get('instrument_id') or '').strip()
-        exchange = str(item.get('exchange_id') or '').strip().lower()
-        market_type = str(item.get('market_type') or '').strip().lower()
-        if not symbol:
-            continue
-        suffix = f"@{exchange}:{market_type}" if exchange and market_type else (
-            f"@{exchange}" if exchange else (f"@{market_type}" if market_type else '')
-        )
-        instrument_keys.append(f"{market}:{symbol}{suffix}" if market else f"{symbol}{suffix}")
+        key = instrument_key_from_metadata(item)
+        if key:
+            instrument_keys.append(key)
     market_types = sorted({
         str(item.get('market_type') or '').strip().lower()
         for item in instruments if isinstance(item, dict) and item.get('market_type')
@@ -244,7 +238,7 @@ class CommunityService:
     
     def __init__(self):
         self.billing = get_billing_service()
-    
+
     # ==========================================
     # ==========================================
     

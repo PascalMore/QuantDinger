@@ -30,6 +30,7 @@ Return Python source only. Do not use markdown fences or explanatory prose.
 
 ## Universe and market ownership
 - Use canonical instruments such as `USStock:SPY`, `HKStock:00700.HK`, `CNStock:600519.SH`, `Crypto:BTC/USDT@binance:spot`, `Crypto:AAPL/USD@gate:spot`, `Crypto:00700/HKD@gate:spot`, and a catalog-confirmed exchange equity perpetual such as `Crypto:HK0700/USDT@binance:swap`.
+- Broker-listed `USStock`, `HKStock`, `CNStock`, `Forex`, `Futures`, and `MOEX` identities are exactly `Market:Symbol`. Never append a broker, listing venue, `@spot`, or other execution metadata to them. Only exchange-routed `Crypto` identities carry an `@venue:market_type` suffix.
 - Exchange-listed equities keep the `Crypto` market prefix because execution uses the selected exchange credential. Preserve the exact venue, market type, currency, symbol, product type, and API family returned by product search; never rewrite the execution identity as a broker-listed `USStock` or `HKStock` instrument.
 - An explicit venue is part of the instrument identity: `Crypto:SOL/USDT@binance:swap` is also a perpetual contract. Preserve the exchange and market-type suffix exactly.
 - An explicit venue is also a hard market-data route. Never silently replace it with another exchange when history is unavailable. An unqualified `@spot` or `@swap` identifier may use the platform's public research route, but generated live-ready source should preserve the exact catalog-selected venue.

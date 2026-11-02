@@ -347,26 +347,42 @@ class IndicatorCaller:
             return None, None
 
 
-def get_indicator_params(indicator_id: int) -> List[Dict[str, Any]]:
+def get_indicator_params(indicator_id: int, user_id: int) -> Optional[List[Dict[str, Any]]]:
     """
     Return indicator parameter declarations for API consumers.
     
     Args:
         indicator_id: Indicator ID.
+        user_id: Current authenticated user ID.
         
     Returns:
-        Parameter declaration list.
+        Parameter declaration list, or ``None`` when the indicator is not
+        visible to the current user.
     """
     try:
         with get_db_connection() as db:
             cursor = db.cursor()
-            cursor.execute("SELECT code FROM qd_indicator_codes WHERE id = %s", (indicator_id,))
+            cursor.execute(
+                """
+                SELECT code
+                FROM qd_indicator_codes
+                WHERE id = %s
+                  AND (
+                    user_id = %s
+                    OR (
+                      publish_to_community = 1
+                      AND (review_status = 'approved' OR review_status IS NULL)
+                    )
+                  )
+                """,
+                (int(indicator_id), int(user_id)),
+            )
             row = cursor.fetchone()
             cursor.close()
             
             if row and row['code']:
                 return IndicatorParamsParser.parse_params(row['code'])
-            return []
+            return None
     except Exception as e:
         logger.error(f"Error getting indicator params: {e}")
-        return []
+        raise

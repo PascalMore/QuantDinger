@@ -135,6 +135,42 @@ def test_target_percent_opens_position_with_explicit_quantity():
     assert captured["strategy_run_id"] == 42
 
 
+def test_equity_intent_matches_legacy_venue_suffixed_candidate_and_frame():
+    executor = TradingExecutor.__new__(TradingExecutor)
+    executor._get_current_positions = lambda *_args: []
+    captured = {}
+    executor._execute_signal = lambda **kwargs: captured.update(kwargs) or True
+    legacy_key = "USStock:DXCM@NASDAQ:spot"
+    candidate = {
+        "key": legacy_key,
+        "market": "USStock",
+        "symbol": "DXCM",
+        "exchange_id": "NASDAQ",
+        "market_type": "spot",
+    }
+
+    result = executor._execute_strategy_v2_intent(
+        strategy_id=1099,
+        strategy_name="NASDAQ portfolio",
+        intent=OrderIntent(symbol="USStock:DXCM", kind="target_percent", value=0.1),
+        frames={legacy_key: _frame()},
+        frequency_frames={"1d": {legacy_key: _frame(101.0)}},
+        candidates=[candidate],
+        initial_capital=10_000.0,
+        leverage=1.0,
+        execution_mode="signal",
+        notification_config={},
+        trading_config={},
+        exchange_config={},
+        signal_ts=1,
+        strategy_run_id=42,
+    )
+
+    assert result is True
+    assert captured["symbol"] == "DXCM"
+    assert captured["market_frames"]["1d"]["close"].iloc[-1] == 101.0
+
+
 def test_live_target_percent_compounds_with_strategy_equity():
     executor = TradingExecutor.__new__(TradingExecutor)
     executor._get_current_positions = lambda *_args: []

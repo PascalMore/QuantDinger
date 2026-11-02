@@ -1,0 +1,22 @@
+[run]
+branch = True
+relative_files = True
+source =
+    .
+omit =
+    migrations/*
+    scripts/*
+    tests/*
+    run.py
+
+[report]
+include =
+    app/*
+exclude_also =
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:
+show_missing = True
+skip_covered = True
+
+[xml]
+output = coverage.xml

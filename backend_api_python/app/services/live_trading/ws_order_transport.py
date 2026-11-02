@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
 from app.services.live_trading.base import LiveTradingError, _get_requests_verify
+from app.utils.security_fingerprint import opaque_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -106,12 +107,16 @@ class _PersistentRpcSocket:
         self._socket: Any = None
         self._lock = threading.RLock()
         self._last_used = 0.0
+        self._retry_after = 0.0
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: Optional[threading.Thread] = None
 
     @property
     def last_used(self) -> float:
         return self._last_used
 
     def close(self) -> None:
+        self._heartbeat_stop.set()
         with self._lock:
             sock, self._socket = self._socket, None
             if sock is not None:
@@ -120,8 +125,51 @@ class _PersistentRpcSocket:
                 except Exception:
                     pass
 
+    def _start_heartbeat(self) -> None:
+        interval = _float_env(
+            "LIVE_TRADING_WS_ORDER_HEARTBEAT_SEC", 15.0, 5.0, 60.0
+        )
+        self._heartbeat_stop.set()
+        self._heartbeat_stop = threading.Event()
+        stop_event = self._heartbeat_stop
+
+        def _run() -> None:
+            while not stop_event.wait(interval):
+                if not self._lock.acquire(blocking=False):
+                    continue
+                try:
+                    sock = self._socket
+                    if sock is None:
+                        return
+                    sock.ping()
+                    self._last_used = time.monotonic()
+                except Exception as exc:
+                    logger.info(
+                        "WebSocket order heartbeat failed venue=%s: %s",
+                        self.venue,
+                        exc,
+                    )
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                    self._socket = None
+                    return
+                finally:
+                    self._lock.release()
+
+        self._heartbeat_thread = threading.Thread(
+            target=_run,
+            name=f"ws-order-heartbeat-{self.venue}",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
     def _connect(self) -> Any:
         sock = None
+        now = time.monotonic()
+        if now < self._retry_after:
+            raise WebSocketOrderUnavailable("WebSocket order connection is in retry cooldown")
         try:
             import websocket
         except ImportError as exc:
@@ -145,8 +193,19 @@ class _PersistentRpcSocket:
             if self.authenticate is not None:
                 self.authenticate(sock)
             self._socket = sock
+            self._retry_after = 0.0
+            self._last_used = time.monotonic()
+            self._start_heartbeat()
             return sock
         except WebSocketOrderUnavailable:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            self._retry_after = time.monotonic() + _float_env(
+                "LIVE_TRADING_WS_ORDER_RETRY_COOLDOWN_SEC", 30.0, 1.0, 300.0
+            )
             raise
         except Exception as exc:
             if sock is not None:
@@ -154,7 +213,18 @@ class _PersistentRpcSocket:
                     sock.close()
                 except Exception:
                     pass
+            self._retry_after = time.monotonic() + _float_env(
+                "LIVE_TRADING_WS_ORDER_RETRY_COOLDOWN_SEC", 30.0, 1.0, 300.0
+            )
             raise WebSocketOrderUnavailable(f"WebSocket order connection unavailable: {exc}") from exc
+
+    def ensure_connected(self) -> bool:
+        """Open and authenticate the socket before the first order is submitted."""
+        with self._lock:
+            if self._socket is not None:
+                return True
+            self._connect()
+            return self._socket is not None
 
     def request(
         self,
@@ -165,7 +235,6 @@ class _PersistentRpcSocket:
     ) -> Dict[str, Any]:
         with self._lock:
             started_at = time.monotonic()
-            reused = self._socket is not None
             idle_reconnect = _float_env(
                 "LIVE_TRADING_WS_ORDER_IDLE_RECONNECT_SEC", 20.0, 5.0, 300.0
             )
@@ -175,6 +244,7 @@ class _PersistentRpcSocket:
                 and (time.monotonic() - self._last_used) >= idle_reconnect
             ):
                 self.close()
+            reused = self._socket is not None
             sock = self._socket or self._connect()
             sent = False
             try:
@@ -217,7 +287,7 @@ _pool: "OrderedDict[str, _PersistentRpcSocket]" = OrderedDict()
 
 
 def _pool_key(venue: str, url: str, api_key: str, qualifier: str = "") -> str:
-    digest = hashlib.sha256(f"{url}|{api_key}|{qualifier}".encode("utf-8")).hexdigest()
+    digest = opaque_fingerprint(url, api_key, qualifier, namespace="ws-order-pool")
     return f"{venue}:{digest}"
 
 
@@ -295,7 +365,8 @@ def submit_binance_order(
             {"id": request_id, "method": "order.place", "params": signed},
             matches=lambda msg: str(msg.get("id") or "") == request_id,
         )
-    except WebSocketOrderUnavailable:
+    except WebSocketOrderUnavailable as exc:
+        logger.warning("Binance WebSocket order entry unavailable; falling back to REST: %s", exc)
         return None
     status = int(response.get("status") or 0)
     if status < 200 or status >= 300:
@@ -326,9 +397,27 @@ def _okx_authenticator(api_key: str, secret_key: str, passphrase: str) -> Callab
                 }
             )
         )
-        reply = json.loads(str(sock.recv()))
-        if not isinstance(reply, dict) or reply.get("event") != "login" or str(reply.get("code")) != "0":
-            raise WebSocketOrderUnavailable("OKX WebSocket login failed")
+        deadline = time.monotonic() + _float_env(
+            "LIVE_TRADING_WS_ORDER_RESPONSE_TIMEOUT_SEC", 4.0, 0.5, 20.0
+        )
+        while time.monotonic() < deadline:
+            reply = json.loads(str(sock.recv()))
+            if isinstance(reply, dict) and reply.get("event") == "notice":
+                logger.info(
+                    "OKX WebSocket notice code=%s msg=%s",
+                    reply.get("code"),
+                    reply.get("msg"),
+                )
+                continue
+            if isinstance(reply, dict) and reply.get("event") == "login" and str(reply.get("code")) == "0":
+                return
+            detail = {
+                "event": reply.get("event") if isinstance(reply, dict) else "",
+                "code": reply.get("code") if isinstance(reply, dict) else "",
+                "msg": reply.get("msg") if isinstance(reply, dict) else "",
+            }
+            raise WebSocketOrderUnavailable(f"OKX WebSocket login failed: {detail}")
+        raise WebSocketOrderUnavailable("OKX WebSocket login timed out")
 
     return authenticate
 
@@ -343,11 +432,7 @@ def submit_okx_order(
 ) -> Optional[Dict[str, Any]]:
     if not websocket_order_entry_enabled():
         return None
-    url = (
-        "wss://wspap.okx.com:8443/ws/v5/private"
-        if simulated
-        else "wss://ws.okx.com:8443/ws/v5/private"
-    )
+    url = "wss://wspap.okx.com/ws/v5/private" if simulated else "wss://ws.okx.com/ws/v5/private"
     request_id = uuid.uuid4().hex
     conn = _connection(
         venue="okx",
@@ -361,7 +446,8 @@ def submit_okx_order(
             {"id": request_id, "op": "order", "args": [dict(body or {})]},
             matches=lambda msg: str(msg.get("id") or "") == request_id,
         )
-    except WebSocketOrderUnavailable:
+    except WebSocketOrderUnavailable as exc:
+        logger.warning("OKX WebSocket order entry unavailable; falling back to REST: %s", exc)
         return None
     data = response.get("data") if isinstance(response, dict) else None
     first = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
@@ -472,13 +558,22 @@ def _bitget_authenticator(
                 }
             )
         )
-        reply = json.loads(str(sock.recv()))
-        if (
-            not isinstance(reply, dict)
-            or reply.get("event") != "login"
-            or str(reply.get("code") or "") != "0"
-        ):
-            raise WebSocketOrderUnavailable("Bitget UTA WebSocket login failed")
+        deadline = time.monotonic() + _float_env(
+            "LIVE_TRADING_WS_ORDER_RESPONSE_TIMEOUT_SEC", 4.0, 0.5, 20.0
+        )
+        while time.monotonic() < deadline:
+            reply = json.loads(str(sock.recv()))
+            if not isinstance(reply, dict):
+                continue
+            if reply.get("event") == "login" and str(reply.get("code") or "") == "0":
+                return
+            if reply.get("event") in {"error", "login"}:
+                code = str(reply.get("code") or "")
+                message = str(reply.get("msg") or "")
+                raise WebSocketOrderUnavailable(
+                    f"Bitget UTA WebSocket login failed code={code or 'unknown'} msg={message or 'unknown'}"
+                )
+        raise WebSocketOrderUnavailable("Bitget UTA WebSocket login timed out")
 
     return authenticate
 
@@ -646,3 +741,84 @@ def submit_gate_order(
     data = response.get("data") if isinstance(response, dict) else None
     result = data.get("result") if isinstance(data, dict) else None
     return result if isinstance(result, dict) else {"raw": result}
+
+
+def warm_websocket_order_client(client: Any, *, exchange_id: str, market_type: str) -> bool:
+    """Best-effort connection warmup for the exchange client selected in Quick Trade."""
+    if not websocket_order_entry_enabled():
+        return False
+    exchange = str(exchange_id or "").strip().lower()
+    market = str(market_type or "swap").strip().lower()
+    try:
+        if exchange == "okx":
+            simulated = bool(getattr(client, "simulated_trading", False))
+            url = "wss://wspap.okx.com/ws/v5/private" if simulated else "wss://ws.okx.com/ws/v5/private"
+            conn = _connection(
+                venue="okx",
+                url=url,
+                api_key=client.api_key,
+                qualifier="simulated" if simulated else "live",
+                authenticate=_okx_authenticator(
+                    client.api_key, client.secret_key, client.passphrase
+                ),
+            )
+        elif (
+            exchange == "bitget"
+            and hasattr(client, "channel_api_code")
+        ):
+            resolver = getattr(client, "_resolve_bitget_client", None)
+            selected_client = resolver() if callable(resolver) else client
+            if selected_client.__class__.__name__ != "BitgetMixClient":
+                return False
+            client = selected_client
+            simulated = bool(getattr(client, "simulated_trading", False))
+            api_code = str(getattr(client, "channel_api_code", "") or "")
+            url = (
+                "wss://wspap.bitget.com/v3/ws/private"
+                if simulated
+                else "wss://ws.bitget.com/v3/ws/private"
+            )
+            conn = _connection(
+                venue="bitget-uta",
+                url=url,
+                api_key=client.api_key,
+                qualifier=f"{'demo' if simulated else 'live'}:{api_code}",
+                authenticate=_bitget_authenticator(
+                    client.api_key, client.secret_key, client.passphrase
+                ),
+            )
+        elif exchange == "gate":
+            futures = market != "spot"
+            testnet = "testnet" in str(getattr(client, "base_url", "") or "").lower()
+            if futures:
+                url = (
+                    "wss://ws-testnet.gate.com/v4/ws/futures/usdt"
+                    if testnet
+                    else "wss://fx-ws.gateio.ws/v4/ws/usdt"
+                )
+                login_channel = "futures.login"
+            else:
+                if testnet:
+                    return False
+                url = "wss://api.gateio.ws/ws/v4/"
+                login_channel = "spot.login"
+            channel_id = str(getattr(client, "channel_id", "") or "")
+            conn = _connection(
+                venue="gate-futures" if futures else "gate-spot",
+                url=url,
+                api_key=client.api_key,
+                qualifier=channel_id,
+                headers={"X-Gate-Size-Decimal": "1"},
+                authenticate=_gate_authenticator(
+                    client.api_key, client.secret_key, login_channel
+                ),
+            )
+        else:
+            return False
+        connected = conn.ensure_connected()
+        if connected:
+            logger.info("WebSocket order connection warmed venue=%s", exchange)
+        return connected
+    except Exception as exc:
+        logger.info("WebSocket order warmup skipped venue=%s: %s", exchange, exc)
+        return False

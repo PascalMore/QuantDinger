@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import threading
 import time
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, Optional, Tuple
@@ -38,6 +39,14 @@ def _settlement_currency(symbol: str, product_type: str) -> str:
 
 class BitgetMixClient(BaseRestClient):
     _CHANNEL_API_CODE = "qvz9x"
+    _shared_contract_cache: Dict[
+        Tuple[str, str, str], Tuple[float, Dict[str, Any]]
+    ] = {}
+    _shared_contract_cache_lock = threading.RLock()
+    _shared_pos_mode_cache: Dict[
+        Tuple[str, str, bool, str], Tuple[float, str]
+    ] = {}
+    _shared_pos_mode_cache_lock = threading.RLock()
 
     _CHANNEL_API_CODE_ORDER_PATHS = {
         "/api/v3/trade/place-order",
@@ -393,7 +402,16 @@ class BitgetMixClient(BaseRestClient):
         mc = (margin_coin or "USDT").strip().upper()
         pt = str(product_type or "USDT-FUTURES")
         key = f"{pt}:{sym}:{mc}"
+        shared_key = (self.base_url, self.api_key, self.simulated_trading, key)
         now = time.time()
+        with self._shared_pos_mode_cache_lock:
+            shared_cached = self._shared_pos_mode_cache.get(shared_key)
+        if shared_cached:
+            ts, mode = shared_cached
+            if (now - float(ts or 0.0)) <= float(self._pos_mode_cache_ttl_sec or 60.0):
+                self._pos_mode_cache[key] = shared_cached
+                return str(mode)
+
         cached = self._pos_mode_cache.get(key)
         if cached:
             ts, mode = cached
@@ -410,6 +428,8 @@ class BitgetMixClient(BaseRestClient):
             if isinstance(d, dict):
                 mode = str(d.get("holdMode") or "").strip().lower()
             self._pos_mode_cache[key] = (now, mode)
+            with self._shared_pos_mode_cache_lock:
+                self._shared_pos_mode_cache[shared_key] = (now, mode)
             return mode
         except Exception:
             return ""
@@ -462,7 +482,16 @@ class BitgetMixClient(BaseRestClient):
         if not sym:
             return {}
         key = f"{pt}:{sym}"
+        shared_key = (self.base_url, pt, sym)
         now = time.time()
+        with self._shared_contract_cache_lock:
+            shared_cached = self._shared_contract_cache.get(shared_key)
+        if shared_cached:
+            ts, obj = shared_cached
+            if obj and (now - float(ts or 0.0)) <= float(self._contract_cache_ttl_sec or 300.0):
+                self._contract_cache[key] = shared_cached
+                return obj
+
         cached = self._contract_cache.get(key)
         if cached:
             ts, obj = cached
@@ -479,7 +508,17 @@ class BitgetMixClient(BaseRestClient):
         first: Dict[str, Any] = items[0] if isinstance(items, list) and items else {}
         if isinstance(first, dict) and first:
             self._contract_cache[key] = (now, first)
+            with self._shared_contract_cache_lock:
+                self._shared_contract_cache[shared_key] = (now, first)
         return first if isinstance(first, dict) else {}
+
+    def prepare_ws_order_entry(self, *, symbol: str, market_type: str) -> None:
+        """Prime stable order metadata before latency-sensitive submission."""
+        if str(market_type or "swap").strip().lower() == "spot":
+            return
+        product_type = "USDT-FUTURES"
+        self.get_contract(symbol=symbol, product_type=product_type)
+        self.get_account_pos_mode(symbol=symbol, product_type=product_type)
 
     def _normalize_size(self, *, symbol: str, product_type: str, base_size: float) -> Tuple[Decimal, Optional[int]]:
         """

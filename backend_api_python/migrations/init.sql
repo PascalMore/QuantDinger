@@ -1635,8 +1635,15 @@ VALUES
   ('watchlist', 'universe.catalog.watchlist', 'Mixed', 'watchlist', 'watchlist', 'current_user', TRUE, 'active'),
   ('csi300', 'universe.catalog.csi300', 'CNStock', 'index', 'provider', '000300.SH', TRUE, 'data_required'),
   ('csi500', 'universe.catalog.csi500', 'CNStock', 'index', 'provider', '000905.SH', TRUE, 'data_required'),
+  ('csi1000', 'universe.catalog.csi1000', 'CNStock', 'index', 'public_snapshot', '000852.SH', TRUE, 'data_required'),
+  ('csi800', 'universe.catalog.csi800', 'CNStock', 'index', 'public_snapshot', '000906.SH', TRUE, 'data_required'),
+  ('sse50', 'universe.catalog.sse50', 'CNStock', 'index', 'public_snapshot', '000016.SH', TRUE, 'data_required'),
   ('sp500', 'universe.catalog.sp500', 'USStock', 'index', 'provider', 'SPX', TRUE, 'data_required'),
   ('nasdaq100', 'universe.catalog.nasdaq100', 'USStock', 'index', 'provider', 'NDX', TRUE, 'data_required'),
+  ('dow30', 'universe.catalog.dow30', 'USStock', 'index', 'public_snapshot', 'DJIA', TRUE, 'data_required'),
+  ('sp400', 'universe.catalog.sp400', 'USStock', 'index', 'public_snapshot', 'SP400', TRUE, 'data_required'),
+  ('sp600', 'universe.catalog.sp600', 'USStock', 'index', 'public_snapshot', 'SP600', TRUE, 'data_required'),
+  ('russell1000', 'universe.catalog.russell1000', 'USStock', 'index', 'public_snapshot', 'RUI', TRUE, 'data_required'),
   ('etf_pool', 'universe.catalog.etfPool', 'Mixed', 'etf', 'provider', 'etf_pool', TRUE, 'data_required'),
   ('crypto_top100', 'universe.catalog.cryptoTop100', 'Crypto', 'market_cap', 'provider', 'top100', TRUE, 'data_required'),
   ('hk_equities', 'universe.catalog.hkEquities', 'HKStock', 'market', 'provider', 'hk_equities', TRUE, 'data_required')
@@ -1653,11 +1660,30 @@ ON CONFLICT DO NOTHING;
 INSERT INTO qd_universes
   (code, name, name_i18n_key, market, universe_type, source, source_ref, is_system, status)
 VALUES
-  ('hk_hsi_core50', 'Hang Seng Index Core 50', 'universe.catalog.hkHsiCore50', 'HKStock', 'index', 'public_snapshot', 'HSI_CORE50', TRUE, 'data_required'),
+  ('hk_hsi', 'Hang Seng Index', 'universe.catalog.hkHsi', 'HKStock', 'index', 'public_snapshot', 'HSI', TRUE, 'data_required'),
   ('hk_tech30', 'Hang Seng TECH 30', 'universe.catalog.hkTech30', 'HKStock', 'index', 'public_snapshot', 'HSTECH', TRUE, 'data_required'),
   ('hk_china_enterprises50', 'Hang Seng China Enterprises 50', 'universe.catalog.hkChinaEnterprises50', 'HKStock', 'index', 'public_snapshot', 'HSCEI', TRUE, 'data_required'),
-  ('hk_high_dividend50', 'Hang Seng High Dividend Yield 50', 'universe.catalog.hkHighDividend50', 'HKStock', 'index', 'public_snapshot', 'HSHDYI', TRUE, 'data_required')
+  ('hk_stock_connect', 'Hong Kong Stock Connect', 'universe.catalog.hkStockConnect', 'HKStock', 'market', 'public_snapshot', 'HK_STOCK_CONNECT', TRUE, 'data_required')
 ON CONFLICT DO NOTHING;
+
+INSERT INTO qd_universes
+  (code, name, name_i18n_key, market, universe_type, source, source_ref, is_system, status)
+VALUES
+  ('us_sector_information_technology', 'US Information Technology', 'universe.catalog.usSectorInformationTechnology', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Information Technology', TRUE, 'data_required'),
+  ('us_sector_health_care', 'US Health Care', 'universe.catalog.usSectorHealthCare', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Health Care', TRUE, 'data_required'),
+  ('us_sector_financials', 'US Financials', 'universe.catalog.usSectorFinancials', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Financials', TRUE, 'data_required'),
+  ('us_sector_consumer_discretionary', 'US Consumer Discretionary', 'universe.catalog.usSectorConsumerDiscretionary', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Consumer Discretionary', TRUE, 'data_required'),
+  ('us_sector_communication_services', 'US Communication Services', 'universe.catalog.usSectorCommunicationServices', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Communication Services', TRUE, 'data_required'),
+  ('us_sector_industrials', 'US Industrials', 'universe.catalog.usSectorIndustrials', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Industrials', TRUE, 'data_required'),
+  ('us_sector_consumer_staples', 'US Consumer Staples', 'universe.catalog.usSectorConsumerStaples', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Consumer Staples', TRUE, 'data_required'),
+  ('us_sector_energy', 'US Energy', 'universe.catalog.usSectorEnergy', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Energy', TRUE, 'data_required'),
+  ('us_sector_utilities', 'US Utilities', 'universe.catalog.usSectorUtilities', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Utilities', TRUE, 'data_required'),
+  ('us_sector_real_estate', 'US Real Estate', 'universe.catalog.usSectorRealEstate', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Real Estate', TRUE, 'data_required'),
+  ('us_sector_materials', 'US Materials', 'universe.catalog.usSectorMaterials', 'USStock', 'industry', 'public_snapshot', 'sp500:GICS Sector:Materials', TRUE, 'data_required')
+ON CONFLICT DO NOTHING;
+
+UPDATE qd_universes SET status = 'deprecated', updated_at = NOW()
+WHERE code IN ('hk_hsi_core50', 'hk_high_dividend50') AND is_system = TRUE;
 
 UPDATE qd_universes SET source_ref = 'USStock:hot:etf', updated_at = NOW()
 WHERE code = 'us_etf' AND is_system = TRUE;
@@ -1865,8 +1891,11 @@ CREATE INDEX IF NOT EXISTS idx_backtest_equity_points_run_id ON qd_backtest_equi
 CREATE TABLE IF NOT EXISTS qd_factor_research_runs (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL DEFAULT 1 REFERENCES qd_users(id) ON DELETE CASCADE,
-    source_id INTEGER NOT NULL,
+    source_id INTEGER,
     source_name VARCHAR(255) DEFAULT '',
+    universe_id INTEGER,
+    universe_name VARCHAR(255) DEFAULT '',
+    research_mode VARCHAR(20) NOT NULL DEFAULT 'strategy',
     market VARCHAR(100) DEFAULT '',
     timeframe VARCHAR(10) DEFAULT '',
     start_date VARCHAR(20) NOT NULL DEFAULT '',
@@ -1898,6 +1927,10 @@ ALTER TABLE qd_factor_research_runs ADD COLUMN IF NOT EXISTS coverage DOUBLE PRE
 ALTER TABLE qd_factor_research_runs ADD COLUMN IF NOT EXISTS net_long_short_return DOUBLE PRECISION;
 ALTER TABLE qd_factor_research_runs ADD COLUMN IF NOT EXISTS observation_count INTEGER;
 ALTER TABLE qd_factor_research_runs ADD COLUMN IF NOT EXISTS summary_backfilled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE qd_factor_research_runs ALTER COLUMN source_id DROP NOT NULL;
+ALTER TABLE qd_factor_research_runs ADD COLUMN IF NOT EXISTS universe_id INTEGER;
+ALTER TABLE qd_factor_research_runs ADD COLUMN IF NOT EXISTS universe_name VARCHAR(255) DEFAULT '';
+ALTER TABLE qd_factor_research_runs ADD COLUMN IF NOT EXISTS research_mode VARCHAR(20) NOT NULL DEFAULT 'strategy';
 
 DO $$
 DECLARE
@@ -1929,6 +1962,42 @@ CREATE INDEX IF NOT EXISTS idx_factor_research_runs_source_id
   ON qd_factor_research_runs(source_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_factor_research_runs_user_source_recent
   ON qd_factor_research_runs(user_id, source_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_factor_research_runs_user_universe_recent
+  ON qd_factor_research_runs(user_id, universe_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS qd_user_factors (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
+  name VARCHAR(120) NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category VARCHAR(40) NOT NULL DEFAULT 'custom',
+  direction_hint VARCHAR(40) NOT NULL DEFAULT 'neutral',
+  expression TEXT NOT NULL,
+  default_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+  parameter_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+  required_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dependencies JSONB NOT NULL DEFAULT '[]'::jsonb,
+  warmup_bars INTEGER NOT NULL DEFAULT 1,
+  version INTEGER NOT NULL DEFAULT 1,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_user_factors_owner
+  ON qd_user_factors(user_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS qd_user_factor_versions (
+  id BIGSERIAL PRIMARY KEY,
+  factor_id BIGINT NOT NULL REFERENCES qd_user_factors(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
+  version_no INTEGER NOT NULL,
+  expression TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(factor_id, version_no)
+);
+CREATE INDEX IF NOT EXISTS idx_user_factor_versions_owner
+  ON qd_user_factor_versions(user_id, factor_id, version_no DESC);
 
 -- =============================================================================
 -- 13. Exchange Credentials
@@ -1966,7 +2035,8 @@ CREATE TABLE IF NOT EXISTS qd_manual_positions (
     group_name VARCHAR(100) DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(user_id, market, symbol, side, group_name)
+    UNIQUE(user_id, market, symbol, side, group_name),
+    CONSTRAINT uq_manual_positions_id_user UNIQUE(id, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_manual_positions_user_id ON qd_manual_positions(user_id);
@@ -1991,7 +2061,11 @@ CREATE TABLE IF NOT EXISTS qd_position_alerts (
     repeat_interval INTEGER DEFAULT 0,
     notes TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT fk_position_alerts_owned_position
+        FOREIGN KEY (position_id, user_id)
+        REFERENCES qd_manual_positions(id, user_id)
+        ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_position_alerts_user_id ON qd_position_alerts(user_id);
@@ -2336,6 +2410,7 @@ CREATE INDEX IF NOT EXISTS idx_analysis_memory_symbol ON qd_analysis_memory(mark
 CREATE INDEX IF NOT EXISTS idx_analysis_memory_created ON qd_analysis_memory(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_analysis_memory_validated ON qd_analysis_memory(validated_at) WHERE validated_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_analysis_memory_user ON qd_analysis_memory(user_id);
+CREATE INDEX IF NOT EXISTS idx_analysis_memory_user_created ON qd_analysis_memory(user_id, created_at DESC);
 
 -- Migration: Add user_id column to existing qd_analysis_memory table
 DO $$

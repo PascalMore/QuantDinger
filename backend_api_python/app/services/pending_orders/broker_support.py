@@ -41,6 +41,31 @@ def broker_protection_prices(
     return float(stop or 0.0), float(take or 0.0)
 
 
+def native_stock_protection_allowed(
+    payload: Dict[str, Any],
+    exchange_config: Dict[str, Any],
+    quantity: float,
+    stop_price: float,
+    take_price: float,
+) -> bool:
+    """Keep broker brackets opt-in and limited to whole-share orders."""
+    enabled = payload.get("native_stock_protection")
+    if enabled is None:
+        enabled = exchange_config.get("native_stock_protection")
+    enabled = (
+        enabled
+        if isinstance(enabled, bool)
+        else str(enabled or "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    value = abs(float(quantity or 0.0))
+    return bool(
+        enabled
+        and (stop_price > 0 or take_price > 0)
+        and value > 0
+        and abs(value - round(value)) <= 1e-9
+    )
+
+
 def redact_exchange_json(value: str) -> str:
     from app.services.live_trading.partner_attribution import redact_partner_attribution
 

@@ -158,6 +158,8 @@ A valid response contains <code>valid: true</code> and the manifest. Verify the 
 
 The parser also normalizes selected aliases, such as <code>600519.XSHG</code> to <code>CNStock:600519.SH</code> and <code>BTCUSDT</code> to <code>BTC/USDT</code>.
 
+Broker-listed securities use <code>Market:Symbol</code> as their canonical strategy identity. Do not append a broker or listing venue such as <code>@NASDAQ</code>, <code>@NYSE</code>, <code>@HKEX</code>, or <code>@spot</code> to <code>USStock</code>, <code>HKStock</code>, <code>CNStock</code>, <code>Forex</code>, <code>Futures</code>, or <code>MOEX</code> identifiers. The runtime keeps broker and listing metadata separately for execution. Only exchange-routed <code>Crypto</code> identities carry an <code>@venue:market_type</code> suffix.
+
 Production strategies should use the full market prefix. Crypto defaults to spot when no market type is present. Only swap instruments can permit contract leverage. Parsing a market name does not by itself guarantee data coverage or live-trading support; see the live venue matrix in Section 18.
 
 ### Exchange-routed equity products: preserve the trading instrument

@@ -426,6 +426,29 @@ def test_dual_direction_strategy_conflicts_with_either_owned_leg(monkeypatch):
     assert conflict["strategy_id"] == 31
 
 
+def test_ibkr_dynamic_portfolio_reserves_account_stock_inventory(monkeypatch):
+    target = _strategy(32, "long")
+    other = _strategy(33, "long")
+    keys = {
+        32: (7, 17, "ibkr", "spot", "UNIVERSE:INDEX:NASDAQ100", "long"),
+        33: (7, 17, "ibkr", "spot", "AAPL", "long"),
+    }
+
+    class _Service:
+        @staticmethod
+        def get_strategy(strategy_id, user_id=None):
+            return other if strategy_id == 33 else None
+
+    monkeypatch.setattr(strategy_live_guard, "strategy_live_lock_key", lambda row, _uid: keys[int(row["id"])])
+    monkeypatch.setattr(strategy_live_guard, "get_strategy_service", lambda: _Service())
+    monkeypatch.setattr(strategy_live_guard, "get_db_connection", lambda: _Db(_Cursor([{"id": 33}])))
+
+    conflict = strategy_live_guard.find_live_strategy_conflict(target, 7)
+
+    assert conflict["strategy_id"] == 33
+    assert conflict["exchange_id"] == "ibkr"
+
+
 def test_neutral_grid_preflight_owns_both_legs(monkeypatch):
     from app.services.grid import exchange_requirements
     from app.services.live_trading import factory

@@ -95,8 +95,8 @@ def available_strategy_cash(equity, positions, candidates, leverage, prices=None
     return max(0.0, equity - occupied)
 
 
-def pricing_members(candidates, positions):
-    if len(candidates) < 30:
+def pricing_members(candidates, positions, *, require_complete=False):
+    if require_complete or len(candidates) < 30:
         return candidates
     held = {key.rsplit('::', 1)[0] for key in positions}
     return [item for item in candidates if item['key'] in held] or candidates[:1]

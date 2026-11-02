@@ -118,7 +118,8 @@ def get_positions():
             {
                 "symbol": st.get("symbol"),
                 "trading_config": trading_config,
-            }
+            },
+            strategy_id=int(strategy_id),
         )
         if allowed:
             allowed_upper = {

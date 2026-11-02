@@ -760,9 +760,8 @@ class CryptoDataSource(BaseDataSource):
             # Concise trace so backtest logs can correlate requested window with actual window
             if klines:
                 try:
-                    from datetime import datetime as _dt
-                    first_ts = _dt.utcfromtimestamp(klines[0]['time']).isoformat()
-                    last_ts = _dt.utcfromtimestamp(klines[-1]['time']).isoformat()
+                    first_ts = datetime.fromtimestamp(klines[0]["time"], timezone.utc).isoformat()
+                    last_ts = datetime.fromtimestamp(klines[-1]["time"], timezone.utc).isoformat()
                     logger.info(
                         f"[CryptoKline] {symbol} {timeframe} returned {len(klines)} candles, "
                         f"utc_range={first_ts}~{last_ts}, limit={limit}, before_time={before_time}"

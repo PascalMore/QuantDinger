@@ -62,12 +62,24 @@ Use Compose v2 commands: `docker compose ...`.
 
 Use this mode for normal cloud deployment. It pulls backend, web frontend, and mobile H5 images from GHCR. No local Python or Node build is required.
 
+The one-command installer is recommended. It creates the installation
+directory, generates random local credentials, asks for the initial
+administrator, and starts the services:
+
 ```bash
-mkdir -p ~/quantdinger
+curl -fsSL https://raw.githubusercontent.com/OpenByteInc/QuantDinger/main/install.sh | bash -s -- ~/quantdinger
+```
+
+For a manually managed download, fetch the environment bootstrap script as
+well:
+
+```bash
+mkdir -p ~/quantdinger/scripts
 cd ~/quantdinger
 curl -O https://raw.githubusercontent.com/OpenByteInc/QuantDinger/main/docker-compose.ghcr.yml
 curl -O https://raw.githubusercontent.com/OpenByteInc/QuantDinger/main/.env.example
-cp .env.example .env
+curl -o scripts/bootstrap_env.py https://raw.githubusercontent.com/OpenByteInc/QuantDinger/main/scripts/bootstrap_env.py
+python3 scripts/bootstrap_env.py --compose-file docker-compose.ghcr.yml
 ```
 
 Edit `.env` before first start:
@@ -79,7 +91,12 @@ FRONTEND_URL=https://app.example.com,https://m.example.com
 ALLOW_LOCAL_DESKTOP_BROKERS=false
 ```
 
-The GHCR backend entrypoint can generate `SECRET_KEY` on first start and write it back to `.env`. You may also set `SECRET_KEY` manually to a long random string. The same file also contains Compose orchestration settings:
+The bootstrap script generates `POSTGRES_PASSWORD`, `SECRET_KEY`, and
+`CREDENTIAL_ENCRYPTION_KEY` without printing them. Do not regenerate the
+PostgreSQL password of a running installation. Re-running the same command
+during an upgrade preserves existing values and can recover the database
+password from the current container or a legacy `DATABASE_URL`. The same file
+also contains Compose orchestration settings:
 
 ```ini
 FRONTEND_HOST=127.0.0.1
@@ -131,8 +148,7 @@ Use this mode only when you need to build the backend from local source.
 ```bash
 git clone https://github.com/OpenByteInc/QuantDinger.git
 cd QuantDinger
-cp .env.example .env
-./scripts/generate-secret-key.sh
+python3 scripts/bootstrap_env.py
 ```
 
 Edit `.env`:
@@ -160,11 +176,13 @@ All deployment and application settings use one project-root file:
 |------|---------|---------|
 | `.env` | Docker Compose and every backend process | Runtime settings, credentials, ports, image tags, database, Redis, Kafka, and worker settings |
 
-After pulling an update, Compose runs the one-shot `env-sync` service before
-database and Kafka initialization. It appends new fields and imports values that
-exist only in legacy backend env files without replacing current values or
-comments. A timestamped backup is created only when `.env` changes. The manual
-command remains available for preview and maintenance:
+After pulling an update, run `python3 scripts/bootstrap_env.py` before any
+Compose command (add `--compose-file docker-compose.ghcr.yml` for a manually
+managed GHCR deployment). After bootstrap, Compose runs the one-shot `env-sync`
+service before database and Kafka initialization. It appends new fields and
+imports values that exist only in legacy backend environment files without
+replacing current values or comments. A timestamped backup is created only when
+`.env` changes. The manual command remains available for preview and maintenance:
 
 ```bash
 python scripts/sync_env.py --env-file .env --template .env.example --backup
@@ -173,6 +191,14 @@ python scripts/sync_env.py --env-file .env --template .env.example --backup
 The one-command installer performs the same merge whenever it is rerun. For a
 manual one-time old deployment migration, pass `--legacy backend.env` or
 `--legacy backend_api_python/.env`; legacy files remain untouched.
+
+You may also rerun `python3 scripts/bootstrap_env.py` before an upgrade. It
+keeps `POSTGRES_PASSWORD` from `.env`, recovers it from a legacy `DATABASE_URL`,
+or reads it from the existing `quantdinger-db` container, in that order. If a
+PostgreSQL data volume exists but the credential cannot be recovered, the
+command stops instead of generating a new password and disconnecting the
+existing database. Restore the original value from an `.env` backup; do not
+delete the volume.
 
 ## 5. Event runtime and replica settings
 
@@ -400,6 +426,7 @@ docker compose -f docker-compose.ghcr.yml restart backend
 Update GHCR images:
 
 ```bash
+python3 scripts/bootstrap_env.py --compose-file docker-compose.ghcr.yml
 docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml run --rm migration
 docker compose -f docker-compose.ghcr.yml run --rm kafka-init
@@ -410,6 +437,7 @@ For full repository deployment:
 
 ```bash
 git pull --ff-only
+python3 scripts/bootstrap_env.py
 docker compose build backend
 docker compose run --rm migration
 docker compose run --rm kafka-init

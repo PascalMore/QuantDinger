@@ -379,3 +379,28 @@ def test_crypto_market_data_defaults_to_system_exchange_and_preserves_product(mo
     assert len(candidates) == 3
     assert ("Crypto", ["BTC/USDT"], "bybit", "swap") in batches
     assert prices["Crypto:BTC/USDT@bybit:swap"] == 84_000.0
+
+
+def test_market_data_defaults_repair_legacy_equity_keys_without_losing_metadata():
+    candidates = [
+        {
+            "key": "USStock:DXCM@NASDAQ:spot",
+            "market": "USStock",
+            "symbol": "DXCM",
+            "exchange_id": "NASDAQ",
+            "market_type": "spot",
+        },
+        {
+            "key": "HKStock:00700.HK@HKEX:spot",
+            "market": "HKStock",
+            "symbol": "00700.HK",
+            "exchange_id": "HKEX",
+            "market_type": "spot",
+        },
+    ]
+
+    _apply_market_data_defaults(candidates)
+
+    assert [item["key"] for item in candidates] == ["USStock:DXCM", "HKStock:00700.HK"]
+    assert candidates[0]["exchange_id"] == "NASDAQ"
+    assert candidates[0]["market_type"] == "spot"

@@ -197,6 +197,9 @@ class AnalysisMemory:
                     
                     CREATE INDEX IF NOT EXISTS idx_analysis_memory_user
                     ON qd_analysis_memory(user_id);
+
+                    CREATE INDEX IF NOT EXISTS idx_analysis_memory_user_created
+                    ON qd_analysis_memory(user_id, created_at DESC);
                 """)
                 
                 db.commit()
@@ -270,7 +273,8 @@ class AnalysisMemory:
         symbol: str,
         days: int = 7,
         limit: int = 5,
-        user_id: int | None = None,
+        *,
+        user_id: int,
     ) -> List[Dict]:
         """
         Get recent analysis history for a symbol.
@@ -288,11 +292,8 @@ class AnalysisMemory:
             with get_db_connection() as db:
                 cur = db.cursor()
                 days_int = int(days)
-                user_clause = " AND user_id = %s" if user_id is not None else ""
-                params = (market, symbol, int(user_id), days_int, limit) if user_id is not None else (
-                    market, symbol, days_int, limit
-                )
-                cur.execute(f"""
+                params = (market, symbol, int(user_id), days_int, limit)
+                cur.execute("""
                     SELECT 
                         id, decision, confidence, price_at_analysis,
                         summary, reasons, scores,
@@ -300,7 +301,7 @@ class AnalysisMemory:
                         task_status, task_error, updated_at
                     FROM qd_analysis_memory
                     WHERE market = %s AND symbol = %s
-                    {user_clause}
+                    AND user_id = %s
                     AND created_at > NOW() - (%s || ' days')::interval
                     ORDER BY created_at DESC
                     LIMIT %s
@@ -333,7 +334,7 @@ class AnalysisMemory:
             logger.error(f"Failed to get recent memories: {e}")
             return []
 
-    def get_all_history(self, user_id: int = None, page: int = 1, page_size: int = 20) -> Dict:
+    def get_all_history(self, *, user_id: int, page: int = 1, page_size: int = 20) -> Dict:
         """
         Get all analysis history with pagination.
         
@@ -351,25 +352,24 @@ class AnalysisMemory:
             with get_db_connection() as db:
                 cur = db.cursor()
                 
-                # Build WHERE clause based on user_id
-                where_clause = "WHERE user_id = %s" if user_id else ""
-                params_count = (user_id,) if user_id else ()
-                
                 # Get total count
-                cur.execute(f"SELECT COUNT(*) as cnt FROM qd_analysis_memory {where_clause}", params_count)
+                cur.execute(
+                    "SELECT COUNT(*) as cnt FROM qd_analysis_memory WHERE user_id = %s",
+                    (int(user_id),),
+                )
                 total_row = cur.fetchone()
                 total = total_row['cnt'] if total_row else 0
                 
                 # Get paginated results
-                params = (user_id, page_size, offset) if user_id else (page_size, offset)
-                cur.execute(f"""
+                params = (int(user_id), page_size, offset)
+                cur.execute("""
                     SELECT 
                         id, market, symbol, decision, confidence, price_at_analysis,
                         summary, reasons, scores, indicators_snapshot, raw_result,
                         created_at, validated_at, was_correct, actual_return_pct,
                         task_status, task_error, updated_at
                     FROM qd_analysis_memory
-                    {where_clause}
+                    WHERE user_id = %s
                     ORDER BY created_at DESC
                     LIMIT %s OFFSET %s
                 """, params)
@@ -410,7 +410,7 @@ class AnalysisMemory:
             logger.error(f"Failed to get all history: {e}")
             return {"items": [], "total": 0, "page": page, "page_size": page_size}
 
-    def delete_history(self, memory_id: int, user_id: int = None) -> bool:
+    def delete_history(self, memory_id: int, *, user_id: int) -> bool:
         """
         Delete a history record by ID.
         
@@ -424,11 +424,10 @@ class AnalysisMemory:
         try:
             with get_db_connection() as db:
                 cur = db.cursor()
-                if user_id:
-                    # Only delete if it belongs to the user
-                    cur.execute("DELETE FROM qd_analysis_memory WHERE id = %s AND user_id = %s", (memory_id, user_id))
-                else:
-                    cur.execute("DELETE FROM qd_analysis_memory WHERE id = %s", (memory_id,))
+                cur.execute(
+                    "DELETE FROM qd_analysis_memory WHERE id = %s AND user_id = %s",
+                    (int(memory_id), int(user_id)),
+                )
                 db.commit()
                 affected = cur.rowcount
                 cur.close()
@@ -556,8 +555,9 @@ class AnalysisMemory:
         market: str,
         symbol: str,
         current_indicators: Dict,
+        *,
+        user_id: int,
         limit: int = 3,
-        user_id: int | None = None,
     ) -> List[Dict]:
         """
         Find historical analyses with similar technical patterns.
@@ -577,18 +577,15 @@ class AnalysisMemory:
             
             with get_db_connection() as db:
                 cur = db.cursor()
-                user_clause = " AND user_id = %s" if user_id is not None else ""
-                params = (market, symbol, int(user_id), limit * 5) if user_id is not None else (
-                    market, symbol, limit * 5
-                )
-                cur.execute(f"""
+                params = (market, symbol, int(user_id), limit * 5)
+                cur.execute("""
                     SELECT 
                         id, decision, confidence, price_at_analysis,
                         summary, reasons, indicators_snapshot,
                         created_at, was_correct, actual_return_pct
                     FROM qd_analysis_memory
                     WHERE market = %s AND symbol = %s
-                    {user_clause}
+                    AND user_id = %s
                     AND validated_at IS NOT NULL
                     AND was_correct IS NOT NULL
                     ORDER BY validated_at DESC NULLS LAST, created_at DESC
@@ -636,7 +633,7 @@ class AnalysisMemory:
             return []
 
     def record_feedback(
-        self, memory_id: int, feedback: str, user_id: int | None = None
+        self, memory_id: int, feedback: str, *, user_id: int
     ) -> bool:
         """
         Record user feedback on an analysis.
@@ -648,15 +645,12 @@ class AnalysisMemory:
         try:
             with get_db_connection() as db:
                 cur = db.cursor()
-                user_clause = " AND user_id = %s" if user_id is not None else ""
-                params = (feedback, memory_id, int(user_id)) if user_id is not None else (
-                    feedback, memory_id
-                )
-                cur.execute(f"""
+                params = (feedback, int(memory_id), int(user_id))
+                cur.execute("""
                     UPDATE qd_analysis_memory
                     SET user_feedback = %s, feedback_at = NOW()
                     WHERE id = %s
-                    {user_clause}
+                    AND user_id = %s
                 """, params)
                 updated = cur.rowcount > 0
                 db.commit()
@@ -843,7 +837,12 @@ class AnalysisMemory:
         return stats
     
     def get_confidence_accuracy_by_bucket(
-        self, market: str = None, symbol: str = None, days: int = 90
+        self,
+        *,
+        user_id: int,
+        market: str = None,
+        symbol: str = None,
+        days: int = 90,
     ) -> Dict[str, float]:
         """
         Compute actual accuracy by confidence bucket for calibration.
@@ -853,8 +852,13 @@ class AnalysisMemory:
         try:
             with get_db_connection() as db:
                 cur = db.cursor()
-                where = ["validated_at IS NOT NULL", "was_correct IS NOT NULL", "confidence IS NOT NULL"]
-                params = []
+                where = [
+                    "user_id = %s",
+                    "validated_at IS NOT NULL",
+                    "was_correct IS NOT NULL",
+                    "confidence IS NOT NULL",
+                ]
+                params = [int(user_id)]
                 days_int = int(days)
                 if market:
                     where.append("market = %s")
@@ -887,7 +891,12 @@ class AnalysisMemory:
             return {}
 
     def get_adjusted_confidence(
-        self, raw_confidence: int, market: str = None, symbol: str = None
+        self,
+        raw_confidence: int,
+        *,
+        user_id: int,
+        market: str = None,
+        symbol: str = None,
     ) -> int:
         """
         Adjust confidence based on historical accuracy in that bucket.
@@ -901,7 +910,11 @@ class AnalysisMemory:
                 break
         if not bucket_key:
             return max(1, min(99, int(raw_confidence)))
-        acc_map = self.get_confidence_accuracy_by_bucket(market=market, symbol=symbol)
+        acc_map = self.get_confidence_accuracy_by_bucket(
+            user_id=int(user_id),
+            market=market,
+            symbol=symbol,
+        )
         acc = acc_map.get(bucket_key)
         if acc is None or acc <= 0:
             return max(1, min(99, int(raw_confidence)))
@@ -912,8 +925,14 @@ class AnalysisMemory:
         adjusted = int(raw_confidence * factor)
         return max(1, min(99, adjusted))
 
-    def get_performance_stats(self, market: str = None, symbol: str = None, 
-                              days: int = 30) -> Dict[str, Any]:
+    def get_performance_stats(
+        self,
+        *,
+        user_id: int,
+        market: str = None,
+        symbol: str = None,
+        days: int = 30,
+    ) -> Dict[str, Any]:
         """
         Get AI performance statistics.
         
@@ -924,8 +943,8 @@ class AnalysisMemory:
             with get_db_connection() as db:
                 cur = db.cursor()
                 
-                where_clauses = ["validated_at IS NOT NULL"]
-                params = []
+                where_clauses = ["user_id = %s", "validated_at IS NOT NULL"]
+                params = [int(user_id)]
                 
                 if market:
                     where_clauses.append("market = %s")
@@ -934,7 +953,7 @@ class AnalysisMemory:
                     where_clauses.append("symbol = %s")
                     params.append(symbol)
                 
-                days_int = int(days)
+                days_int = max(1, min(int(days), 365))
                 where_clauses.append("created_at > NOW() - (%s || ' days')::interval")
                 params.append(days_int)
                 
@@ -993,7 +1012,7 @@ class AnalysisMemory:
                         (row['helpful_count'] / row['feedback_count'] * 100) 
                         if row['feedback_count'] and row['feedback_count'] > 0 else 0, 2
                     ),
-                    "period_days": days,
+                    "period_days": days_int,
                     "regime_performance": _build_regime_performance(regime_rows),
                 }
                 

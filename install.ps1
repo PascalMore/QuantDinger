@@ -17,6 +17,7 @@ $ComposeFile = "docker-compose.yml"
 $EnvFile = ".env"
 $EnvTemplate = ".env.example"
 $LegacyEnv = "backend.env"
+$script:EnvExistedBeforeInstall = $false
 
 function Fail($Message) {
     Write-Host "Error: $Message" -ForegroundColor Red
@@ -57,6 +58,51 @@ function Repair-EnvLayout($Path, [string[]]$KnownKeys) {
     $repaired = [regex]::Replace($content, $pattern, [Environment]::NewLine)
     if ($repaired -ne $content) {
         Set-Content -LiteralPath $Path -Value $repaired.TrimEnd("`r", "`n") -Encoding UTF8
+    }
+}
+
+function Get-PostgresPasswordFromUrl($DatabaseUrl) {
+    if (-not $DatabaseUrl) { return "" }
+    try {
+        $uri = [Uri]$DatabaseUrl
+        if ($uri.Scheme -notin @("postgres", "postgresql")) { return "" }
+        $separator = $uri.UserInfo.IndexOf(":")
+        if ($separator -lt 0) { return "" }
+        return [Uri]::UnescapeDataString($uri.UserInfo.Substring($separator + 1))
+    } catch {
+        return ""
+    }
+}
+
+function Get-PostgresPasswordFromContainer {
+    try {
+        $raw = docker inspect --format '{{json .Config.Env}}' quantdinger-db 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $raw) { return "" }
+        foreach ($entry in ($raw | ConvertFrom-Json)) {
+            if ($entry -like "POSTGRES_PASSWORD=*") {
+                return $entry.Substring("POSTGRES_PASSWORD=".Length)
+            }
+        }
+    } catch {
+        return ""
+    }
+    return ""
+}
+
+function Test-ExistingPostgresVolume {
+    $projectName = if ($env:COMPOSE_PROJECT_NAME) {
+        $env:COMPOSE_PROJECT_NAME
+    } else {
+        ((Split-Path -Leaf $InstallDir).ToLowerInvariant() -replace '[^a-z0-9_-]', '').TrimStart([char[]]"_-")
+    }
+    if (-not $projectName) { $projectName = "quantdinger" }
+    try {
+        $volume = docker volume ls --quiet `
+            --filter "label=com.docker.compose.project=$projectName" `
+            --filter "label=com.docker.compose.volume=postgres_data" 2>$null
+        return [bool]$volume
+    } catch {
+        return $false
     }
 }
 
@@ -179,6 +225,7 @@ function Check-Prerequisites {
 function Prepare-Directory {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Set-Location $InstallDir
+    $script:EnvExistedBeforeInstall = (Test-Path -LiteralPath $EnvFile) -or (Test-Path -LiteralPath $LegacyEnv)
 }
 
 function Download-Files {
@@ -247,6 +294,21 @@ function Collect-Settings {
     $script:BackendPort = Read-Value "Backend bind address" ((Get-EnvValue $EnvFile "BACKEND_PORT") -replace '^$', '127.0.0.1:5000')
 
     $existingPgPassword = Get-EnvValue $EnvFile "POSTGRES_PASSWORD"
+    if (-not $existingPgPassword) {
+        $existingPgPassword = Get-PostgresPasswordFromContainer
+        if ($existingPgPassword) {
+            Write-Host "Recovered the existing PostgreSQL credential from the current container." -ForegroundColor Yellow
+        }
+    }
+    if (-not $existingPgPassword) {
+        $existingPgPassword = Get-PostgresPasswordFromUrl (Get-EnvValue $EnvFile "DATABASE_URL")
+        if ($existingPgPassword) {
+            Write-Host "Recovered the existing PostgreSQL credential from DATABASE_URL." -ForegroundColor Yellow
+        }
+    }
+    if (-not $existingPgPassword -and ($EnvExistedBeforeInstall -or (Test-ExistingPostgresVolume))) {
+        Fail "The existing installation has no recoverable PostgreSQL password. Refusing to generate a replacement because it could disconnect existing data. Restore POSTGRES_PASSWORD in $EnvFile before continuing."
+    }
     if ($existingPgPassword) { $script:PostgresPassword = $existingPgPassword } else { $script:PostgresPassword = New-HexSecret 18 }
 
     Write-Host ""

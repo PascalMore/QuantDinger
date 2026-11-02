@@ -19,6 +19,7 @@ from app.utils.broker_session import BrokerSessionRegistry
 from app.utils.credential_crypto import decrypt_credential_blob, encrypt_credential_blob
 from app.utils.db import get_db_connection
 from app.services.alpaca_trading import AlpacaClient, AlpacaConfig
+from app.utils.trading_venue_visibility import is_trading_venue_enabled
 
 logger = get_logger(__name__)
 
@@ -26,6 +27,12 @@ alpaca_blp = Blueprint('alpaca', __name__)
 
 # Clients are isolated by authenticated user and saved credential id.
 _sessions = BrokerSessionRegistry('alpaca')
+
+
+@alpaca_blp.before_request
+def _require_alpaca_enabled():
+    if not is_trading_venue_enabled('alpaca'):
+        return jsonify({"success": False, "error": "brokerAccounts.tradingVenueDisabled"}), 403
 
 
 def _placeholder_status():
@@ -407,6 +414,26 @@ def get_orders():
         return jsonify({"success": True, "data": client.get_orders(status=status, limit=limit, raise_on_error=True)})
     except Exception as e:
         logger.error(f"Get orders failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@alpaca_blp.route('/fills', methods=['GET'])
+@login_required
+def get_fills():
+    """Get authoritative Alpaca fill activities for the selected account."""
+    try:
+        client, err = _require_connected_client()
+        if err is not None:
+            return err
+        symbol = str(request.args.get("symbol") or "").strip()
+        limit = int(request.args.get("limit") or 100)
+        return jsonify({
+            "success": True,
+            "data": client.get_fill_history(symbol=symbol, limit=limit),
+            "source": "exchange",
+        })
+    except Exception as e:
+        logger.error(f"Get Alpaca fills failed: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 

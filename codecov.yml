@@ -1,0 +1,33 @@
+codecov:
+  require_ci_to_pass: true
+  notify:
+    after_n_builds: 2
+
+fixes:
+  - "::backend_api_python/"
+
+coverage:
+  status:
+    project:
+      backend:
+        informational: true
+        flags:
+          - backend
+    patch:
+      backend:
+        informational: true
+        flags:
+          - backend
+
+comment:
+  layout: "condensed_header, condensed_files, condensed_footer"
+  behavior: default
+  require_changes: true
+  require_base: true
+  require_head: true
+
+flags:
+  backend:
+    paths:
+      - backend_api_python/app/
+    carryforward: false

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app.services.ibkr_trading.client import IBKRClient
@@ -28,9 +29,7 @@ def test_ibkr_get_order_status_queries_completed_orders_after_restart():
 def test_ibkr_get_order_status_uses_account_wide_open_orders_and_commission():
     order = SimpleNamespace(orderId=12, permId=9988)
     status = SimpleNamespace(status="Filled", filled=2, remaining=0, avgFillPrice=100)
-    fill = SimpleNamespace(
-        commissionReport=SimpleNamespace(commission=0.35, currency="USD")
-    )
+    fill = SimpleNamespace(commissionReport=SimpleNamespace(commission=0.35, currency="USD"))
     trade = SimpleNamespace(order=order, orderStatus=status, fills=[fill])
     calls = []
     ib = SimpleNamespace(
@@ -97,3 +96,42 @@ def test_ibkr_get_order_status_recovers_by_order_ref():
     assert result.order_id == 987
     assert result.status == "Filled"
     assert result.raw["orderRef"] == "qd_9_51"
+
+
+def test_ibkr_get_executions_normalizes_fill_and_commission():
+    fill = SimpleNamespace(
+        contract=SimpleNamespace(symbol="AAPL"),
+        execution=SimpleNamespace(
+            execId="e-1",
+            permId=9988,
+            orderId=12,
+            orderRef="qd_9_52",
+            side="SLD",
+            shares=2,
+            price=205.5,
+            time=None,
+        ),
+        commissionReport=SimpleNamespace(commission=0.42, currency="USD"),
+        time=datetime(2026, 10, 15, 2, 0, tzinfo=timezone.utc),
+    )
+    client = object.__new__(IBKRClient)
+    client._ib = SimpleNamespace(reqExecutions=lambda: [fill])
+    client._ensure_connected = lambda: None
+
+    rows = client.get_executions("AAPL")
+
+    assert rows == [
+        {
+            "execution_id": "e-1",
+            "order_id": 9988,
+            "local_order_id": 12,
+            "client_order_id": "qd_9_52",
+            "symbol": "AAPL",
+            "side": "SLD",
+            "quantity": 2.0,
+            "price": 205.5,
+            "executed_at": datetime(2026, 10, 15, 2, 0, tzinfo=timezone.utc),
+            "commission": 0.42,
+            "commission_ccy": "USD",
+        }
+    ]

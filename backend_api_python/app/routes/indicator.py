@@ -712,7 +712,9 @@ def get_indicator_params():
         except ValueError:
             return jsonify({"code": 0, "msg": "indicator_id must be an integer", "data": None}), 400
         
-        params = get_params(indicator_id)
+        params = get_params(indicator_id, int(g.user_id))
+        if params is None:
+            return jsonify({"code": 0, "msg": "indicator_not_found", "data": None}), 404
         return jsonify({"code": 1, "msg": "success", "data": params})
         
     except Exception as e:

@@ -65,6 +65,7 @@ def test_five_hundred_stock_portfolio_reads_positions_once():
     assert calls == [(7, None)]
     assert list(positions) == ['USStock:S001']
     assert pricing_members(candidates, positions) == [candidates[1]]
+    assert pricing_members(candidates, positions, require_complete=True) == candidates
 
 
 def test_live_cancel_waits_for_broker_and_survives_restart():

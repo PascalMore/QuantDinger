@@ -6,13 +6,16 @@ import argparse
 import csv
 import io
 import json
-import re
+import logging
 import sys
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
+import pandas as pd
 import requests
-from pypdf import PdfReader
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -24,14 +27,42 @@ from app.utils.db import get_db_connection
 
 SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
 NASDAQ100_URL = "https://raw.githubusercontent.com/Gary-Strauss/NASDAQ100_Constituents/master/data/nasdaq100_constituents.csv"
+WIKIMEDIA_PAGE_API = "https://api.wikimedia.org/core/v1/wikipedia/en/page"
+DOW30_URL = f"{WIKIMEDIA_PAGE_API}/List_of_Dow_Jones_Industrial_Average_companies/html"
+SP400_URL = f"{WIKIMEDIA_PAGE_API}/List_of_S%26P_400_companies/html"
+SP600_URL = f"{WIKIMEDIA_PAGE_API}/List_of_S%26P_600_companies/html"
+RUSSELL1000_URL = f"{WIKIMEDIA_PAGE_API}/List_of_Russell_1000_companies/html"
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
-HSI_FACTSHEET_BASE = "https://www.hsi.com.hk/static/uploads/contents/en/dl_centre/factsheets"
+HSI_CONSTITUENT_URL = (
+    "https://www.hsi.com.hk/api/wsit-hsi-ddoc-ea-public-website-proxy/"
+    "v1/product-data/pub/constituent/metadata/v2"
+)
+SSE_HK_CONNECT_URL = "https://query.sse.com.cn/commonQuery.do"
+SZSE_HK_CONNECT_URL = "https://www.szse.cn/api/report/ShowReport/data"
+SSE_HK_CONNECT_REFERER = "https://www.sse.com.cn/services/hkexsc/disclo/eligible/"
+SZSE_HK_CONNECT_REFERER = "https://investor.szse.cn/szhk/hkbussiness/underlylist/index.html"
+BUNDLED_UNIVERSE_PATH = ROOT / "app" / "data" / "default_cn_hk_universes.json"
+GLOBAL_BUNDLED_UNIVERSE_PATH = ROOT / "app" / "data" / "default_global_universes.json"
+logger = logging.getLogger(__name__)
 
-HK_FACTSHEETS = {
-    "hk_hsi_core50": ("hsie", 50),
-    "hk_tech30": ("hsteche", 30),
-    "hk_china_enterprises50": ("hsceie", 50),
-    "hk_high_dividend50": ("hshdyie", 50),
+HK_HSI_SERIES = {
+    "hk_hsi": ("hsi", "00001.00"),
+    "hk_tech30": ("hstech", "02083.00"),
+    "hk_china_enterprises50": ("hscei", "00014.00"),
+}
+
+US_SECTOR_UNIVERSES = {
+    "us_sector_information_technology": "Information Technology",
+    "us_sector_health_care": "Health Care",
+    "us_sector_financials": "Financials",
+    "us_sector_consumer_discretionary": "Consumer Discretionary",
+    "us_sector_communication_services": "Communication Services",
+    "us_sector_industrials": "Industrials",
+    "us_sector_consumer_staples": "Consumer Staples",
+    "us_sector_energy": "Energy",
+    "us_sector_utilities": "Utilities",
+    "us_sector_real_estate": "Real Estate",
+    "us_sector_materials": "Materials",
 }
 
 CURATED_ETF_SYMBOLS = {
@@ -49,29 +80,24 @@ CURATED_ETF_SYMBOLS = {
 EXPECTED_MEMBER_COUNTS = {
     "csi300": (300, 300),
     "csi500": (500, 500),
+    "csi1000": (1000, 1000),
+    "csi800": (800, 800),
+    "sse50": (50, 50),
     "sp500": (500, 510),
     "nasdaq100": (100, 102),
+    "dow30": (30, 30),
+    "sp400": (395, 405),
+    "sp600": (595, 610),
+    "russell1000": (950, 1050),
     "crypto_top100": (95, 100),
+    "hk_hsi": (80, 110),
+    "hk_tech30": (30, 30),
+    "hk_china_enterprises50": (50, 50),
+    "hk_stock_connect": (500, 900),
     "hk_etf": (1, 1000),
     "us_etf": (1, 1000),
-    **{code: (count, count) for code, (_factsheet, count) in HK_FACTSHEETS.items()},
+    **{code: (5, 150) for code in US_SECTOR_UNIVERSES},
 }
-
-HK_INDUSTRIES = (
-    "Properties & Construction",
-    "Consumer Discretionary",
-    "Information Technology",
-    "Consumer Staples",
-    "Telecommunications",
-    "Conglomerates",
-    "Healthcare",
-    "Financials",
-    "Industrials",
-    "Materials",
-    "Utilities",
-    "Energy",
-)
-
 
 def _csv_rows(url: str) -> list[dict]:
     response = requests.get(url, timeout=30, headers={"User-Agent": "QuantDinger/4.0"})
@@ -79,43 +105,37 @@ def _csv_rows(url: str) -> list[dict]:
     return list(csv.DictReader(io.StringIO(response.text)))
 
 
-def hk_factsheet(factsheet_code: str) -> list[dict]:
-    url = f"{HSI_FACTSHEET_BASE}/{factsheet_code}.pdf"
-    response = requests.get(url, timeout=45, headers={"User-Agent": "QuantDinger/4.0"})
-    response.raise_for_status()
-    reader = PdfReader(io.BytesIO(response.content))
-    text = "\n".join(page.extract_text() or "" for page in reader.pages)
-    return _parse_hk_factsheet_text(text, factsheet_code)
+def _resilient_get(url: str, **kwargs) -> requests.Response:
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=0.8,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
+    )
+    with requests.Session() as session:
+        session.mount("https://", HTTPAdapter(max_retries=retry))
+        return session.get(url, **kwargs)
 
 
-def _parse_hk_factsheet_text(text: str, factsheet_code: str) -> list[dict]:
-    section = text.split("CONSTITUENTS", 1)[-1].split("Total 100.00", 1)[0]
-    rows = []
-    pattern = re.compile(r"^(\d{4})\s+([A-Z0-9]{12})\s+(.+?)\s+(\d+\.\d+)\s*$")
-    for line in section.splitlines():
-        match = pattern.match(line.strip())
-        if not match:
-            continue
-        symbol, isin, body, raw_weight = match.groups()
-        symbol = symbol.zfill(5)
-        industry = next((value for value in HK_INDUSTRIES if f" {value} " in f" {body} "), "")
-        if not industry:
-            continue
-        name, share_type = body.split(industry, 1)
-        rows.append({
-            "market": "HKStock",
-            "symbol": symbol,
-            "name": name.strip(),
-            "rank": len(rows) + 1,
-            "weight": float(raw_weight) / 100.0,
-            "metadata": {
-                "isin": isin,
-                "industry": industry,
-                "share_type": share_type.strip(),
-                "factsheet_code": factsheet_code,
-            },
-        })
-    return rows
+@lru_cache(maxsize=1)
+def _bundled_universe_document() -> dict:
+    document = json.loads(BUNDLED_UNIVERSE_PATH.read_text(encoding="utf-8"))
+    universes = dict(document.get("universes") or {})
+    if GLOBAL_BUNDLED_UNIVERSE_PATH.exists():
+        global_document = json.loads(GLOBAL_BUNDLED_UNIVERSE_PATH.read_text(encoding="utf-8"))
+        universes.update(global_document.get("universes") or {})
+    return {**document, "universes": universes}
+
+
+def bundled_universe_members(code: str) -> list[dict]:
+    universe = (_bundled_universe_document().get("universes") or {}).get(code) or {}
+    members = universe.get("members") or []
+    if not members:
+        raise RuntimeError(f"bundled universe is unavailable: {code}")
+    return [dict(item) for item in members]
 
 
 def sp500() -> list[dict]:
@@ -155,10 +175,284 @@ def nasdaq100() -> list[dict]:
     ]
 
 
-def csi(index_code: str) -> list[dict]:
-    import akshare as ak  # type: ignore
+def _filter_sp500_sector(members: list[dict], sector: str) -> list[dict]:
+    rows = [
+        {**item, "rank": rank}
+        for rank, item in enumerate(
+            (
+                item
+                for item in members
+                if str((item.get("metadata") or {}).get("sector") or "").strip() == sector
+            ),
+            start=1,
+        )
+    ]
+    return rows
 
-    frame = ak.index_stock_cons_weight_csindex(symbol=index_code)
+
+def load_universe_members(code: str, cache: dict[str, list[dict]] | None = None) -> list[dict]:
+    member_cache = cache if cache is not None else {}
+    if code in member_cache:
+        return member_cache[code]
+    if code in US_SECTOR_UNIVERSES:
+        base_members = load_universe_members("sp500", member_cache)
+        members = _filter_sp500_sector(base_members, US_SECTOR_UNIVERSES[code])
+    else:
+        loader = LOADERS.get(code)
+        if loader is None:
+            raise RuntimeError(f"unsupported universe: {code}")
+        try:
+            members = loader()
+        except Exception as exc:
+            logger.warning("Public source failed for %s; using the bundled snapshot: %s", code, exc)
+            members = bundled_universe_members(code)
+    minimum, maximum = EXPECTED_MEMBER_COUNTS[code]
+    member_count = len({item.get("symbol") for item in members if item.get("symbol")})
+    if not minimum <= member_count <= maximum:
+        logger.warning(
+            "Public source returned %s members for %s; using the bundled snapshot",
+            member_count,
+            code,
+        )
+        members = bundled_universe_members(code)
+    member_cache[code] = members
+    return members
+
+
+def _parse_dow30_tables(tables: list[pd.DataFrame]) -> list[dict]:
+    for frame in tables:
+        frame = frame.copy()
+        frame.columns = [
+            " ".join(str(part) for part in column if str(part) != "nan").strip()
+            if isinstance(column, tuple)
+            else str(column).strip()
+            for column in frame.columns
+        ]
+        symbol_column = next((column for column in frame.columns if column.lower() == "symbol"), "")
+        company_column = next((column for column in frame.columns if column.lower() == "company"), "")
+        if not symbol_column or not company_column:
+            continue
+        industry_column = next((column for column in frame.columns if "industry" in column.lower()), "")
+        exchange_column = next((column for column in frame.columns if "exchange" in column.lower()), "")
+        rows = []
+        for index, item in enumerate(frame.to_dict("records"), start=1):
+            symbol = str(item.get(symbol_column) or "").strip().upper().replace("NYSE:", "").replace("NASDAQ:", "")
+            if not symbol or symbol.lower() == "nan":
+                continue
+            rows.append({
+                "market": "USStock",
+                "symbol": symbol,
+                "name": str(item.get(company_column) or "").strip(),
+                "rank": index,
+                "metadata": {
+                    "industry": str(item.get(industry_column) or "").strip() if industry_column else "",
+                    "exchange": str(item.get(exchange_column) or "").strip() if exchange_column else "",
+                },
+            })
+        if len(rows) == 30:
+            return rows
+    raise RuntimeError("unable to find a valid 30-member Dow Jones table")
+
+
+def dow30() -> list[dict]:
+    response = _resilient_get(DOW30_URL, timeout=(30, 120), headers={"User-Agent": "QuantDinger/5.7.1"})
+    response.raise_for_status()
+    return _parse_dow30_tables(pd.read_html(io.StringIO(response.text)))
+
+
+def _parse_us_index_tables(tables: list[pd.DataFrame], expected_range: tuple[int, int]) -> list[dict]:
+    minimum, maximum = expected_range
+    for frame in tables:
+        frame = frame.copy()
+        frame.columns = [
+            " ".join(str(part) for part in column if str(part) != "nan").strip()
+            if isinstance(column, tuple)
+            else str(column).strip()
+            for column in frame.columns
+        ]
+        symbol_column = next((column for column in frame.columns if column.lower() == "symbol"), "")
+        company_column = next(
+            (column for column in frame.columns if column.lower() in {"security", "company"}),
+            "",
+        )
+        if not symbol_column or not company_column or not minimum <= len(frame) <= maximum:
+            continue
+        sector_column = next((column for column in frame.columns if column.lower() == "gics sector"), "")
+        industry_column = next((column for column in frame.columns if "sub-industry" in column.lower()), "")
+        rows = []
+        for index, item in enumerate(frame.to_dict("records"), start=1):
+            symbol = str(item.get(symbol_column) or "").strip().upper().replace(".", "-")
+            if not symbol or symbol.lower() == "nan":
+                continue
+            rows.append({
+                "market": "USStock",
+                "symbol": symbol,
+                "name": str(item.get(company_column) or "").strip(),
+                "rank": index,
+                "metadata": {
+                    "sector": str(item.get(sector_column) or "").strip() if sector_column else "",
+                    "sub_industry": str(item.get(industry_column) or "").strip() if industry_column else "",
+                },
+            })
+        if minimum <= len(rows) <= maximum:
+            return rows
+    raise RuntimeError("unable to find a valid US index constituent table")
+
+
+def wikipedia_us_index(url: str, expected_range: tuple[int, int]) -> list[dict]:
+    response = _resilient_get(url, timeout=(30, 120), headers={"User-Agent": "QuantDinger/5.7.1"})
+    response.raise_for_status()
+    return _parse_us_index_tables(pd.read_html(io.StringIO(response.text)), expected_range)
+
+
+def _parse_hsi_constituent_payload(payload: dict, index_code: str, series_code: str) -> list[dict]:
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    details = data.get("viewConsDetail") if isinstance(data, dict) else {}
+    items = details.get(index_code) if isinstance(details, dict) else []
+    rows = []
+    for index, item in enumerate(items or [], start=1):
+        symbol = str(item.get("stockCode") or "").strip()
+        if not symbol.isdigit():
+            continue
+        rows.append({
+            "market": "HKStock",
+            "symbol": symbol.zfill(5),
+            "name": str(item.get("stockName") or "").strip(),
+            "rank": index,
+            "metadata": {
+                "series_code": series_code,
+                "index_code": index_code,
+                "exchange": item.get("exchangeListed") or "",
+                "stock_type": item.get("stockType") or "",
+                "source_timestamp": item.get("dateTime") or "",
+            },
+        })
+    return rows
+
+
+def hsi_constituents(series_code: str, index_code: str) -> list[dict]:
+    response = _resilient_get(
+        HSI_CONSTITUENT_URL,
+        params={"data": "rt", "seriesCode": series_code, "language": "en-hk"},
+        timeout=45,
+        headers={"User-Agent": "QuantDinger/5.7.1"},
+    )
+    response.raise_for_status()
+    return _parse_hsi_constituent_payload(response.json(), index_code, series_code)
+
+
+def _parse_sse_hk_stock_connect_payload(payload: dict) -> list[dict]:
+    rows = []
+    for item in (payload.get("pageHelp") or {}).get("data") or []:
+        symbol = str(item.get("SECURITY_CODE") or "").strip()
+        if not symbol.isdigit():
+            continue
+        rows.append({
+            "market": "HKStock",
+            "symbol": symbol.zfill(5),
+            "name": str(item.get("ABBR_CN") or item.get("ABBR_EN") or "").strip(),
+            "rank": len(rows) + 1,
+            "metadata": {
+                "english_name": str(item.get("ABBR_EN") or "").strip(),
+                "source": "sse_hk_stock_connect_official",
+            },
+        })
+    return rows
+
+
+def _parse_szse_hk_stock_connect_report(report: dict) -> list[dict]:
+    rows = []
+    for item in report.get("data") or []:
+        symbol = str(item.get("zqdm") or "").strip()
+        if not symbol.isdigit():
+            continue
+        rows.append({
+            "market": "HKStock",
+            "symbol": symbol.zfill(5),
+            "name": str(item.get("zqjc") or item.get("zqywjc") or "").strip(),
+            "rank": len(rows) + 1,
+            "metadata": {
+                "english_name": str(item.get("zqywjc") or "").strip(),
+                "source": "szse_hk_stock_connect_official",
+            },
+        })
+    return rows
+
+
+def _sse_hk_stock_connect() -> list[dict]:
+    params = {
+        "jsonCallBack": "callback",
+        "sqlId": "COMMON_SSE_JYFW_HGT_XXPL_BDZQQD_L",
+        "isPagination": "true",
+        "pageHelp.pageSize": 1000,
+        "pageHelp.pageNo": 1,
+        "pageHelp.beginPage": 1,
+        "pageHelp.cacheSize": 1,
+        "pageHelp.endPage": 1,
+        "keyword": "",
+    }
+    response = _resilient_get(
+        SSE_HK_CONNECT_URL,
+        params=params,
+        timeout=(15, 60),
+        headers={"User-Agent": "QuantDinger/5.7.1", "Referer": SSE_HK_CONNECT_REFERER},
+    )
+    response.raise_for_status()
+    text = response.text.strip()
+    payload = json.loads(text[text.index("(") + 1:text.rindex(")")])
+    return _parse_sse_hk_stock_connect_payload(payload)
+
+
+def _szse_hk_stock_connect() -> list[dict]:
+    rows_by_symbol = {}
+    page = 1
+    page_count = 1
+    while page <= page_count:
+        response = _resilient_get(
+            SZSE_HK_CONNECT_URL,
+            params={
+                "SHOWTYPE": "JSON",
+                "CATALOGID": "SGT_GGTBDQD",
+                "tab1PAGENO": page,
+            },
+            timeout=(15, 60),
+            headers={"User-Agent": "QuantDinger/5.7.1", "Referer": SZSE_HK_CONNECT_REFERER},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        report = payload[0] if payload else {}
+        metadata = report.get("metadata") or {}
+        page_count = int(metadata.get("pagecount") or 1)
+        for item in _parse_szse_hk_stock_connect_report(report):
+            rows_by_symbol[item["symbol"]] = item
+        page += 1
+    rows = list(rows_by_symbol.values())
+    for index, row in enumerate(rows, start=1):
+        row["rank"] = index
+    return rows
+
+
+def hk_stock_connect() -> list[dict]:
+    for loader in (_sse_hk_stock_connect, _szse_hk_stock_connect):
+        try:
+            rows = loader()
+            if 500 <= len(rows) <= 900:
+                return rows
+            logger.warning("%s returned an invalid member count: %s", loader.__name__, len(rows))
+        except Exception as exc:
+            logger.warning("%s failed, trying the next source: %s", loader.__name__, exc)
+    logger.warning("Official Hong Kong Stock Connect sources failed; using the bundled snapshot")
+    return bundled_universe_members("hk_stock_connect")
+
+
+def csi(code: str, index_code: str) -> list[dict]:
+    try:
+        import akshare as ak  # type: ignore
+
+        frame = ak.index_stock_cons_weight_csindex(symbol=index_code)
+    except Exception as exc:
+        logger.warning("CSI source failed for %s; using the bundled snapshot: %s", code, exc)
+        return bundled_universe_members(code)
     rows = []
     for index, item in enumerate(frame.to_dict("records"), start=1):
         symbol = str(item.get("品种代码") or item.get("成分券代码") or item.get("代码") or "").strip().zfill(6)
@@ -174,6 +468,10 @@ def csi(index_code: str) -> list[dict]:
                 "weight": weight,
                 "metadata": {"exchange": item.get("交易所") or ""},
             })
+    minimum, maximum = EXPECTED_MEMBER_COUNTS[code]
+    if not minimum <= len(rows) <= maximum:
+        logger.warning("CSI source returned %s members for %s; using the bundled snapshot", len(rows), code)
+        return bundled_universe_members(code)
     return rows
 
 
@@ -255,34 +553,74 @@ def symbol_master_etfs(market: str) -> list[dict]:
 LOADERS = {
     "sp500": sp500,
     "nasdaq100": nasdaq100,
-    "csi300": lambda: csi("000300"),
-    "csi500": lambda: csi("000905"),
+    "dow30": dow30,
+    "sp400": lambda: wikipedia_us_index(SP400_URL, EXPECTED_MEMBER_COUNTS["sp400"]),
+    "sp600": lambda: wikipedia_us_index(SP600_URL, EXPECTED_MEMBER_COUNTS["sp600"]),
+    "russell1000": lambda: wikipedia_us_index(RUSSELL1000_URL, EXPECTED_MEMBER_COUNTS["russell1000"]),
+    "csi300": lambda: csi("csi300", "000300"),
+    "csi500": lambda: csi("csi500", "000905"),
+    "csi1000": lambda: csi("csi1000", "000852"),
+    "csi800": lambda: csi("csi800", "000906"),
+    "sse50": lambda: csi("sse50", "000016"),
     "crypto_top100": crypto_top100,
+    "hk_stock_connect": hk_stock_connect,
     "hk_etf": lambda: symbol_master_etfs("HKStock"),
     "us_etf": lambda: symbol_master_etfs("USStock"),
     **{
-        code: (lambda factsheet_code=factsheet_code: hk_factsheet(factsheet_code))
-        for code, (factsheet_code, _count) in HK_FACTSHEETS.items()
+        code: (lambda series_code=series_code, index_code=index_code: hsi_constituents(series_code, index_code))
+        for code, (series_code, index_code) in HK_HSI_SERIES.items()
+    },
+    **{
+        code: (lambda sector=sector: _filter_sp500_sector(sp500(), sector))
+        for code, sector in US_SECTOR_UNIVERSES.items()
     },
 }
 
 SOURCE_METADATA = {
     "sp500": {"url": SP500_URL, "license": "ODC-PDDL", "snapshot_only": True},
     "nasdaq100": {"url": NASDAQ100_URL, "license": "MIT scraper; source data CC BY-SA", "snapshot_only": True},
+    "dow30": {"url": DOW30_URL, "license": "CC BY-SA", "snapshot_only": True},
+    "sp400": {"url": SP400_URL, "license": "CC BY-SA", "snapshot_only": True},
+    "sp600": {"url": SP600_URL, "license": "CC BY-SA", "snapshot_only": True},
+    "russell1000": {"url": RUSSELL1000_URL, "license": "CC BY-SA", "snapshot_only": True},
     "csi300": {"url": "https://www.csindex.com.cn/", "adapter": "AKShare index_stock_cons_weight_csindex", "snapshot_only": True},
     "csi500": {"url": "https://www.csindex.com.cn/", "adapter": "AKShare index_stock_cons_weight_csindex", "snapshot_only": True},
+    "csi1000": {"url": "https://www.csindex.com.cn/", "adapter": "AKShare index_stock_cons_weight_csindex", "snapshot_only": True},
+    "csi800": {"url": "https://www.csindex.com.cn/", "adapter": "AKShare index_stock_cons_weight_csindex", "snapshot_only": True},
+    "sse50": {"url": "https://www.csindex.com.cn/", "adapter": "AKShare index_stock_cons_weight_csindex", "snapshot_only": True},
     "crypto_top100": {"url": COINGECKO_URL, "snapshot_only": True},
+    "hk_stock_connect": {
+        "urls": [SSE_HK_CONNECT_URL, SZSE_HK_CONNECT_URL],
+        "publisher": "Shanghai Stock Exchange / Shenzhen Stock Exchange",
+        "bundled_fallback": True,
+        "snapshot_only": True,
+    },
     "hk_etf": {"adapter": "symbol_master", "market": "HKStock", "asset_class": "etf", "snapshot_only": True},
     "us_etf": {"adapter": "symbol_master", "market": "USStock", "asset_class": "etf", "snapshot_only": True},
     **{
         code: {
-            "url": f"{HSI_FACTSHEET_BASE}/{factsheet_code}.pdf",
+            "url": HSI_CONSTITUENT_URL,
             "publisher": "Hang Seng Indexes Company Limited",
+            "series_code": series_code,
+            "index_code": index_code,
             "snapshot_only": True,
         }
-        for code, (factsheet_code, _count) in HK_FACTSHEETS.items()
+        for code, (series_code, index_code) in HK_HSI_SERIES.items()
+    },
+    **{
+        code: {
+            "derived_from": "sp500",
+            "classification": "GICS Sector",
+            "sector": sector,
+            "url": SP500_URL,
+            "license": "ODC-PDDL",
+            "snapshot_only": True,
+        }
+        for code, sector in US_SECTOR_UNIVERSES.items()
     },
 }
+
+FIXED_CURRENT_HISTORY_MODE = "fixed_current_constituents"
 
 
 def apply_snapshot(code: str, members: list[dict], as_of: date, *, dry_run: bool = False) -> dict:
@@ -368,6 +706,83 @@ def apply_snapshot(code: str, members: list[dict], as_of: date, *, dry_run: bool
     return {"code": code, "members": len(clean), "added": len(set(clean) - active), "removed": len(removed)}
 
 
+def backfill_current_snapshot_as_fixed(
+    code: str,
+    history_from: date,
+    snapshot_as_of: date,
+    *,
+    dry_run: bool = False,
+) -> dict:
+    """Treat the current constituent set as fixed when no historical source exists."""
+    if history_from > snapshot_as_of:
+        raise ValueError("history_from must be on or before snapshot_as_of")
+
+    with get_db_connection() as db:
+        cur = db.cursor()
+        cur.execute(
+            "SELECT id, metadata_json FROM qd_universes WHERE code = ? AND is_system = TRUE",
+            (code,),
+        )
+        universe = cur.fetchone() or {}
+        universe_id = int(universe.get("id") or 0)
+        if not universe_id:
+            raise RuntimeError(f"unknown system universe: {code}")
+
+        cur.execute(
+            "SELECT COUNT(*) AS member_count FROM qd_universe_members WHERE universe_id = ? AND valid_to IS NULL",
+            (universe_id,),
+        )
+        member_count = int((cur.fetchone() or {}).get("member_count") or 0)
+        result = {
+            "universe": code,
+            "history_from": history_from.isoformat(),
+            "snapshot_as_of": snapshot_as_of.isoformat(),
+            "members": member_count,
+            "mode": FIXED_CURRENT_HISTORY_MODE,
+            "apply": not dry_run,
+        }
+        if dry_run:
+            db.rollback()
+            cur.close()
+            return result
+
+        cur.execute("LOCK TABLE qd_universe_members IN SHARE ROW EXCLUSIVE MODE")
+        cur.execute(
+            "DELETE FROM qd_universe_members WHERE universe_id = ? AND valid_to IS NOT NULL",
+            (universe_id,),
+        )
+        cur.execute(
+            """
+            UPDATE qd_universe_members
+            SET valid_from = ?, valid_to = NULL, updated_at = NOW()
+            WHERE universe_id = ? AND valid_to IS NULL
+            """,
+            (history_from, universe_id),
+        )
+
+        metadata = universe.get("metadata_json")
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata) if metadata.strip() else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata.update({
+            "snapshot_as_of": snapshot_as_of.isoformat(),
+            "history_mode": FIXED_CURRENT_HISTORY_MODE,
+            "history_assumed_from": history_from.isoformat(),
+        })
+        cur.execute(
+            """
+            UPDATE qd_universes
+            SET metadata_json = ?, updated_at = NOW()
+            WHERE id = ?
+            """,
+            (json.dumps(metadata, ensure_ascii=False), universe_id),
+        )
+        db.commit()
+        cur.close()
+        return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--universes", default=",".join(LOADERS))
@@ -376,11 +791,9 @@ def main() -> int:
     args = parser.parse_args()
     as_of = date.fromisoformat(args.as_of)
     results = []
+    member_cache: dict[str, list[dict]] = {}
     for code in [item.strip() for item in args.universes.split(",") if item.strip()]:
-        loader = LOADERS.get(code)
-        if loader is None:
-            raise RuntimeError(f"unsupported universe: {code}")
-        members = loader()
+        members = load_universe_members(code, member_cache)
         minimum, maximum = EXPECTED_MEMBER_COUNTS[code]
         if not minimum <= len({item.get("symbol") for item in members}) <= maximum:
             raise RuntimeError(f"{code} member count failed validation: {len(members)}")

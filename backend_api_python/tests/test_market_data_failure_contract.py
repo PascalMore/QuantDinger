@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from app.data_sources.errors import (
@@ -8,7 +9,11 @@ from app.data_sources.errors import (
     MarketDataUnavailableError,
     classify_market_data_failure,
 )
-from app.services.strategy_runtime.timeframes import load_live_frequency_frames
+from app.services.strategy_runtime.timeframes import (
+    live_ready_universe_symbols,
+    load_live_frequency_frames,
+)
+from app.services.strategy_v2 import StrategyV2LiveSession, compile_strategy_v2
 from app.services.strategy_v2.service import StrategyV2BacktestService
 from app.utils.strategy_runtime_logs import format_market_data_log, parse_market_data_log
 
@@ -122,3 +127,66 @@ def test_strategy_frame_batch_keeps_symbol_on_structured_fetch_failure():
 
     assert skipped[0]["symbol"] == "Crypto:MISSING/USDT@binance:spot"
     assert skipped[0]["market_data_error"]["code"] == "symbol_not_found"
+
+
+def test_live_dynamic_universe_excludes_unloaded_and_underwarmed_members():
+    source = """
+def initialize(context):
+    context.set_universe(index="INDEX:NASDAQ100")
+    context.subscribe(frequency="1d")
+    context.set_warmup(260)
+    g.members = []
+
+def on_rebalance(context, data):
+    g.members = list(get_index_stocks("INDEX:NASDAQ100"))
+    for symbol in g.members:
+        get_history(60, frequency="1d", field="close", security_list=[symbol])
+"""
+    index = pd.bdate_range(end="2026-10-22", periods=270)
+    healthy = pd.DataFrame(
+        {
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1000.0,
+        },
+        index=index,
+    )
+    underwarmed = healthy.tail(1)
+    frequency_frames = {
+        "1d": {
+            "USStock:AAPL": healthy,
+            "USStock:EA": underwarmed,
+        }
+    }
+    candidates = [
+        {"key": "USStock:AAPL", "market": "USStock", "symbol": "AAPL"},
+        {"key": "USStock:EA", "market": "USStock", "symbol": "EA"},
+        {"key": "USStock:WRD", "market": "USStock", "symbol": "WRD"},
+    ]
+    manifest = compile_strategy_v2(source).manifest
+
+    ready, shortfalls = live_ready_universe_symbols(
+        frequency_frames,
+        manifest,
+        datetime(2026, 10, 23, tzinfo=timezone.utc),
+        candidates,
+    )
+
+    assert ready == {"USStock:AAPL"}
+    assert [item["symbol"] for item in shortfalls] == ["USStock:EA"]
+
+    members = [item["key"] for item in candidates]
+    session = StrategyV2LiveSession(
+        code=source,
+        frames=frequency_frames["1d"],
+        frequency_frames=frequency_frames,
+        initial_capital=10000,
+        universe_resolver=lambda _reference, _timestamp: [
+            symbol for symbol in members if symbol in ready
+        ],
+    )
+    session.process(frequency_frames["1d"])
+
+    assert session.program.state.members == ["USStock:AAPL"]

@@ -648,6 +648,42 @@ class IBKRClient:
         except Exception as e:
             logger.error(f"Get positions failed: {e}")
             return []
+
+    def get_executions(self, symbol: str = "") -> List[Dict[str, Any]]:
+        """Return normalized account executions for reconciliation."""
+        try:
+            self._ensure_connected()
+            method = getattr(self._ib, "reqExecutions", None)
+            if not callable(method):
+                return []
+            wanted = str(symbol or "").replace("/", "").replace("-", "").upper()
+            output: List[Dict[str, Any]] = []
+            for fill in list(method() or []):
+                contract = getattr(fill, "contract", None)
+                execution = getattr(fill, "execution", None)
+                if execution is None:
+                    continue
+                row_symbol = str(getattr(contract, "symbol", "") or "").replace("/", "").replace("-", "").upper()
+                if wanted and row_symbol != wanted:
+                    continue
+                report = getattr(fill, "commissionReport", None)
+                output.append({
+                    "execution_id": str(getattr(execution, "execId", "") or ""),
+                    "order_id": int(getattr(execution, "permId", 0) or getattr(execution, "orderId", 0) or 0),
+                    "local_order_id": int(getattr(execution, "orderId", 0) or 0),
+                    "client_order_id": str(getattr(execution, "orderRef", "") or ""),
+                    "symbol": row_symbol,
+                    "side": str(getattr(execution, "side", "") or "").upper(),
+                    "quantity": float(getattr(execution, "shares", 0) or 0),
+                    "price": float(getattr(execution, "price", 0) or 0),
+                    "executed_at": getattr(fill, "time", None) or getattr(execution, "time", None),
+                    "commission": abs(float(getattr(report, "commission", 0) or 0)) if report is not None else 0.0,
+                    "commission_ccy": str(getattr(report, "currency", "") or "USD").upper(),
+                })
+            return output
+        except Exception as e:
+            logger.error(f"Get executions failed: {e}")
+            return []
     
     def get_open_orders(self) -> List[Dict[str, Any]]:
         """

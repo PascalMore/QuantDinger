@@ -7,7 +7,6 @@ import string
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
 from typing import Tuple
 from app.utils.db import get_db_connection
 from app.utils.logger import get_logger
@@ -83,8 +82,6 @@ class EmailService:
         """
         try:
             code = self.generate_code()
-            expires_at = datetime.now() + timedelta(minutes=self.code_expire_minutes)
-            
             with get_db_connection() as db:
                 cur = db.cursor()
                 
@@ -103,9 +100,19 @@ class EmailService:
                     """
                     INSERT INTO qd_verification_codes 
                     (email, code, type, expires_at, ip_address)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (
+                        ?, ?, ?,
+                        NOW() + make_interval(mins => ?),
+                        ?
+                    )
                     """,
-                    (email, code, code_type, expires_at, ip_address)
+                    (
+                        email,
+                        code,
+                        code_type,
+                        self.code_expire_minutes,
+                        ip_address,
+                    )
                 )
                 db.commit()
                 cur.close()
@@ -131,71 +138,96 @@ class EmailService:
         try:
             with get_db_connection() as db:
                 cur = db.cursor()
-                
-                # Check if locked due to too many failed attempts
-                lock_window = datetime.now() - timedelta(minutes=self.code_lock_minutes)
+
                 cur.execute(
                     """
-                    SELECT COUNT(*) as cnt FROM qd_verification_codes
+                    SELECT COALESCE(SUM(attempts), 0) AS failed_attempts
+                    FROM qd_verification_codes
                     WHERE email = ? AND type = ?
-                    AND attempts >= ? AND last_attempt_at > ?
-                    AND used_at IS NULL
+                      AND last_attempt_at > NOW() - make_interval(mins => ?)
                     """,
-                    (email, code_type, self.code_max_attempts, lock_window.isoformat())
+                    (email, code_type, self.code_lock_minutes)
                 )
-                lock_row = cur.fetchone()
-                if lock_row and lock_row['cnt'] > 0:
+                failure_row = cur.fetchone() or {}
+                failed_attempts = int(failure_row.get('failed_attempts') or 0)
+                if failed_attempts >= self.code_max_attempts:
+                    db.rollback()
                     cur.close()
                     return False, f'Too many failed attempts. Please try again in {self.code_lock_minutes} minutes'
                 
-                # Find latest unused code for this email/type
+                # Lock the latest code so concurrent guesses cannot race the
+                # attempt counter. Expiration is derived from created_at using
+                # the same database clock that wrote it.
                 cur.execute(
                     """
-                    SELECT id, code as stored_code, expires_at, attempts FROM qd_verification_codes
+                    SELECT
+                        id,
+                        code as stored_code,
+                        attempts,
+                        created_at + make_interval(mins => ?) > NOW() AS is_valid
+                    FROM qd_verification_codes
                     WHERE email = ? AND type = ? AND used_at IS NULL
                     ORDER BY created_at DESC
                     LIMIT 1
+                    FOR UPDATE
                     """,
-                    (email, code_type)
+                    (self.code_expire_minutes, email, code_type)
                 )
                 row = cur.fetchone()
                 
                 if not row:
+                    db.rollback()
                     cur.close()
                     return False, 'Invalid verification code'
                 
                 code_id = row['id']
                 stored_code = row['stored_code']
-                attempts = row['attempts'] or 0
+                attempts = int(row['attempts'] or 0)
+
+                if attempts >= self.code_max_attempts:
+                    db.rollback()
+                    cur.close()
+                    return False, f'Too many failed attempts. Please try again in {self.code_lock_minutes} minutes'
+
+                if not row.get('is_valid'):
+                    db.rollback()
+                    cur.close()
+                    return False, 'Verification code has expired'
                 
                 # Check if code matches
                 if stored_code != code:
-                    # Increment attempt counter
-                    new_attempts = attempts + 1
                     cur.execute(
                         """
-                        UPDATE qd_verification_codes 
-                        SET attempts = ?, last_attempt_at = NOW()
+                        UPDATE qd_verification_codes
+                        SET attempts = COALESCE(attempts, 0) + 1,
+                            last_attempt_at = NOW()
                         WHERE id = ?
+                        RETURNING attempts
                         """,
-                        (new_attempts, code_id)
+                        (code_id,)
+                    )
+                    attempt_row = cur.fetchone() or {}
+                    new_attempts = int(attempt_row.get('attempts') or (attempts + 1))
+                    cur.execute(
+                        """
+                        SELECT COALESCE(SUM(attempts), 0) AS failed_attempts
+                        FROM qd_verification_codes
+                        WHERE email = ? AND type = ?
+                          AND last_attempt_at > NOW() - make_interval(mins => ?)
+                        """,
+                        (email, code_type, self.code_lock_minutes)
+                    )
+                    failure_row = cur.fetchone() or {}
+                    failed_attempts = int(
+                        failure_row.get('failed_attempts') or new_attempts
                     )
                     db.commit()
                     cur.close()
                     
-                    remaining = self.code_max_attempts - new_attempts
+                    remaining = self.code_max_attempts - failed_attempts
                     if remaining <= 0:
                         return False, f'Too many failed attempts. Please try again in {self.code_lock_minutes} minutes'
                     return False, f'Invalid verification code. {remaining} attempts remaining'
-                
-                # Check expiration
-                expires_at = row['expires_at']
-                if isinstance(expires_at, str):
-                    expires_at = datetime.fromisoformat(expires_at)
-                
-                if datetime.now() > expires_at:
-                    cur.close()
-                    return False, 'Verification code has expired'
                 
                 # Mark as used
                 cur.execute(

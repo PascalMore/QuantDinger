@@ -45,6 +45,75 @@ def test_account_activities_paginates_with_last_activity_id(monkeypatch):
     assert calls[0][3] == 7
 
 
+def test_fill_history_uses_exchange_fill_activities_and_execution_time(monkeypatch):
+    client = AlpacaClient(AlpacaConfig(api_key="PK-test", secret_key="secret", paper=True))
+    activities = [
+        {
+            "activity_type": "FILL",
+            "id": "fill-1",
+            "order_id": "order-1",
+            "symbol": "AAPL",
+            "side": "sell",
+            "qty": "1.25",
+            "price": "205.50",
+            "transaction_time": "2026-10-23T08:30:01.123Z",
+            "type": "partial_fill",
+        },
+        {
+            "activity_type": "FILL",
+            "id": "fill-2",
+            "order_id": "order-2",
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": "2",
+            "price": "410",
+            "transaction_time": "2026-10-23T08:29:00Z",
+            "type": "fill",
+        },
+    ]
+    captured = {}
+
+    def fake_activities(**kwargs):
+        captured.update(kwargs)
+        return activities
+
+    monkeypatch.setattr(client, "get_account_activities", fake_activities)
+
+    rows = client.get_fill_history(symbol="AAPL", limit=20)
+
+    assert captured == {
+        "activity_types": ["FILL"],
+        "direction": "desc",
+        "page_size": 100,
+        "max_pages": 20,
+    }
+    assert rows == [{
+        "id": "exchange-alpaca-fill-1",
+        "exchange_fill_id": "fill-1",
+        "exchange_order_id": "order-1",
+        "client_order_id": "",
+        "symbol": "AAPL",
+        "side": "sell",
+        "order_type": "fill",
+        "status": "filled",
+        "market_type": "spot",
+        "amount": pytest.approx(256.875),
+        "filled_amount": pytest.approx(1.25),
+        "avg_fill_price": pytest.approx(205.5),
+        "commission": 0.0,
+        "commission_ccy": "USD",
+        "commission_quote": None,
+        "fees_by_ccy": {},
+        "fee_status": "pending",
+        "realized_pnl": None,
+        "source": "exchange",
+        "filled_at": "2026-10-23T08:30:01.123Z",
+        "created_at": "2026-10-23T08:30:01.123Z",
+        "activity_type": "FILL",
+        "fill_type": "partial_fill",
+    }]
+
+
 def test_bulk_taf_allocation_excludes_manual_trade_from_strategy_share():
     activity = {
         "id": "taf-1", "activity_type": "FEE", "activity_subtype": "TAF",

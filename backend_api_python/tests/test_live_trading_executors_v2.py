@@ -9,6 +9,7 @@ from app.services.live_trading.executors import (
     MarketOrderExecutor,
     RestingLimitExecutor,
 )
+from app.services.live_trading.ws_order_transport import WebSocketOrderUnknown
 
 
 class FakeAdapter:
@@ -89,6 +90,43 @@ def test_market_order_transport_failure_is_left_for_reconciliation():
     assert result.raw == {
         "submit_outcome": "unknown",
         "client_order_id": "qd_7_11_mkt",
+    }
+
+
+@pytest.mark.parametrize(
+    ("executor", "place_method", "price"),
+    [
+        (MarketOrderExecutor, "place_market_order", 0),
+        (RestingLimitExecutor, "place_limit_order", 90000),
+        (LimitThenMarketExecutor, "place_limit_order", 90000),
+    ],
+)
+def test_websocket_sent_without_ack_is_left_for_reconciliation(
+    executor,
+    place_method,
+    price,
+):
+    adapter = FakeAdapter()
+
+    def unknown(_intent):
+        raise WebSocketOrderUnknown("order frame sent without an acknowledgement")
+
+    setattr(adapter, place_method, unknown)
+    result = executor(adapter).execute(
+        OrderIntent(
+            symbol="BTC/USDT",
+            side="buy",
+            quantity=1,
+            price=price,
+            client_order_id="qd_ws_unknown",
+        )
+    )
+
+    assert result.success is False
+    assert result.status == "unknown"
+    assert result.raw == {
+        "submit_outcome": "unknown",
+        "client_order_id": "qd_ws_unknown",
     }
 
 

@@ -28,7 +28,7 @@ IGNORED_DIRECTORIES = {
 
 MARKDOWN_LINK_RE = re.compile(r"(!?)\[[^\]]*\]\(([^)]+)\)")
 HTML_LINK_RE = re.compile(
-    r"<(a|img|script|link)\b[^>]*?\b(?:href|src)\s*=\s*([\"'])(.*?)\2",
+    r"<(a|img|script|link|source)\b[^>]*?\b(?:href|src|srcset)\s*=\s*([\"'])(.*?)\2",
     re.IGNORECASE | re.DOTALL,
 )
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")

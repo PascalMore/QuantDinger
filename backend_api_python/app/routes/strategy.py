@@ -214,6 +214,8 @@ def update_strategy(strategy_id: int):
 def delete_strategy(strategy_id: int):
     from app.services.strategy import StrategyDeleteBlocked
 
+    if not _strategy(strategy_id):
+        return _error("strategyV2.strategyNotFound", 404)
     if get_trading_executor().is_running(strategy_id):
         return _error("strategyV2.stopBeforeDelete", 409)
     try:
