@@ -730,3 +730,125 @@ def test_fetch_ohlcv_restores_final_limit_on_all_paths(monkeypatch):
         "BTC/USDT:USDT", "15m", 1700000900000) is None
     assert gate_swap.get_gate_swap_volume_evidence(
         "BTC/USDT:USDT", "15m", 1700001800000) is None
+
+
+def test_gate_multibatch_same_identity_accumulates_all_bar_evidence():
+    """V1.9-01: three same-identity batches keep every bar's evidence (§14.1).
+
+    This is the deterministic fe16b257 failure mode: pages beyond the first
+    used to reset ``state.bars``, so earlier-page evidence was lost and the
+    consumer raised ``gate.swapVolumeEvidenceMissing``.
+    """
+    client = NativeCryptoPublicClient("gate", "swap")
+    stamps = [1700000000 + i * 900 for i in range(6)]
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(stamps[0]), _gate_bar(stamps[1])], symbol="BTC/USDT:USDT",
+        timeframe="15m", since_ms=stamps[0] * 1000, metadata=_synthetic_gate_metadata(),
+    )
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(stamps[2]), _gate_bar(stamps[3])], symbol="BTC/USDT:USDT",
+        timeframe="15m", since_ms=stamps[2] * 1000, metadata=_synthetic_gate_metadata(),
+    )
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(stamps[4]), _gate_bar(stamps[5])], symbol="BTC/USDT:USDT",
+        timeframe="15m", since_ms=stamps[4] * 1000, metadata=_synthetic_gate_metadata(),
+    )
+    for stamp in stamps:
+        evidence = client.get_gate_swap_volume_evidence(
+            "BTC/USDT:USDT", "15m", stamp * 1000
+        )
+        assert evidence is not None, f"page-1..3 bar {stamp} evidence lost"
+        assert evidence["raw_v_contracts"] == "100"
+
+
+def test_gate_symbol_change_resets_accumulated_evidence():
+    """V1.9-02: an identity field change resets state; old evidence is gone."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(1700000000), _gate_bar(1700000900)], symbol="BTC/USDT:USDT",
+        timeframe="15m", since_ms=1700000000000, metadata=_synthetic_gate_metadata(),
+    )
+    assert client.get_gate_swap_volume_evidence("BTC/USDT:USDT", "15m", 1700000000000)
+
+    eth_metadata = _synthetic_gate_metadata(contract="ETH_USDT")
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(1700000000)], symbol="ETH/USDT:USDT", timeframe="15m",
+        since_ms=1700000000000, metadata=eth_metadata,
+    )
+    assert client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000000000) is None
+    assert client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000900000) is None
+    assert client.get_gate_swap_volume_evidence(
+        "ETH/USDT:USDT", "15m", 1700000000000)["native_contract"] == "ETH_USDT"
+
+
+def test_gate_multibatch_same_timestamp_new_batch_overwrites_old_entry():
+    """V1.9-04: merging a later page overwrites same-key entries only."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(1700000000, volume="100")], symbol="BTC/USDT:USDT",
+        timeframe="15m", since_ms=1700000000000, metadata=_synthetic_gate_metadata(),
+    )
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(1700000000, volume="200"), _gate_bar(1700000900)],
+        symbol="BTC/USDT:USDT", timeframe="15m", since_ms=1700000900000,
+        metadata=_synthetic_gate_metadata(),
+    )
+    overwritten = client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000000000)
+    untouched = client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000900000)
+    assert overwritten["raw_v_contracts"] == "200"
+    assert overwritten["base_volume"] == 2.0
+    assert untouched["raw_v_contracts"] == "100"
+
+
+def test_gate_zero_volume_bar_evidence_survives_multiple_pages():
+    """V1.9-05: v=0 bars keep their evidence across pages (§13 interplay)."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(1700000000, volume="0", quote="0"), _gate_bar(1700000900)],
+        symbol="BTC/USDT:USDT", timeframe="15m", since_ms=1700000000000,
+        metadata=_synthetic_gate_metadata(),
+    )
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(1700001800)], symbol="BTC/USDT:USDT", timeframe="15m",
+        since_ms=1700001800000, metadata=_synthetic_gate_metadata(),
+    )
+    zero_evidence = client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000000000)
+    later_evidence = client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700001800000)
+    assert zero_evidence["base_volume"] == 0.0
+    assert zero_evidence["raw_v_contracts"] == "0"
+    assert zero_evidence["historical_applicability"] == "verified"
+    assert set(zero_evidence) == _GATE_SWAP_EVIDENCE_FIELDS
+    assert later_evidence["raw_v_contracts"] == "100"
+
+
+def test_gate_evidence_capacity_cap_evicts_oldest_bars(monkeypatch):
+    """V1.9-03: the 20000-bar cap evicts the oldest entries by timestamp."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    from app.data_sources import native_crypto as native_crypto_module
+    monkeypatch.setattr(
+        native_crypto_module, "_GATE_SWAP_EVIDENCE_MAX_BARS", 3,
+    )
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(1700000000), _gate_bar(1700000900), _gate_bar(1700001800)],
+        symbol="BTC/USDT:USDT", timeframe="15m", since_ms=1700000000000,
+        metadata=_synthetic_gate_metadata(),
+    )
+    client._parse_gate_swap_ohlcv(
+        [_gate_bar(1700002700)], symbol="BTC/USDT:USDT", timeframe="15m",
+        since_ms=1700002700000, metadata=_synthetic_gate_metadata(),
+    )
+    assert client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000000000) is None
+    # Exactly the oldest bar is evicted; everything within the cap survives.
+    assert client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000900000)["raw_v_contracts"] == "100"
+    assert client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700001800000)["raw_v_contracts"] == "100"
+    assert client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700002700000)["raw_v_contracts"] == "100"

@@ -54,6 +54,11 @@ _TIMEFRAME_SECONDS = {
     "1w": 604800,
 }
 
+# Bounded Gate swap evidence store (DESIGN-06-002 V1.8 §14.1): roughly twice
+# the per-venue recent-candle limit, so the pages of one multi-page request
+# accumulate while the store stays bounded.
+_GATE_SWAP_EVIDENCE_MAX_BARS = 20000
+
 
 class NativeCryptoAPIError(RuntimeError):
     """Raised when an exchange public API returns an unusable response."""
@@ -537,8 +542,12 @@ class NativeCryptoPublicClient:
         limit: int = 300,
     ) -> List[List[Any]]:
         if self.id == "gate" and self.market_type == "swap":
-            self._gate_swap_state.identity = None
-            self._gate_swap_state.bars = {}
+            # The pages of one multi-page request accumulate their evidence;
+            # any other call starts a fresh request (DESIGN-06-002 V1.8 §14.1).
+            if not self._gate_swap_request_continues(symbol, timeframe, since):
+                self._gate_swap_state.identity = None
+                self._gate_swap_state.bars = {}
+                self._gate_swap_state.returned_stamps = set()
         if timeframe not in self.timeframes:
             raise NativeCryptoAPIError(f"Unsupported timeframe {timeframe} on {self.id}")
         limit = max(1, min(int(limit or 300), 1000))
@@ -647,11 +656,45 @@ class NativeCryptoPublicClient:
         returned = sorted(unique.values(), key=lambda row: row[0])[:limit]
         if self.id == "gate" and self.market_type == "swap":
             state = self._gate_swap_state
-            final_stamps = {int(row[0]) for row in returned}
+            # F-01 keeps only the bars the caller finally received, but the
+            # accumulated pages of one request are all part of that result, so
+            # the prune spans every stamp the request returned.
+            returned_stamps = getattr(state, "returned_stamps", None) or set()
+            returned_stamps.update(int(row[0]) for row in returned)
+            state.returned_stamps = returned_stamps
             state.bars = {
-                stamp: item for stamp, item in state.bars.items() if stamp in final_stamps
+                stamp: item for stamp, item in state.bars.items() if stamp in returned_stamps
             }
         return returned
+
+    def _gate_swap_request_continues(
+        self,
+        symbol: str,
+        timeframe: str,
+        since: Optional[int],
+    ) -> bool:
+        """True when this call continues the current Gate swap request chain.
+
+        The pages of one multi-page request keep symbol, interval and native
+        contract and walk their ``since`` cursor forward, so they keep the
+        evidence of the earlier pages. Every other call — a different
+        identity, or a standalone fetch without a window — starts a fresh
+        request (DESIGN-06-002 V1.8 §14.1).
+        """
+        if since is None:
+            return False
+        recorded = getattr(self._gate_swap_state, "identity", None)
+        if not isinstance(recorded, dict):
+            return False
+        recorded_since = recorded.get("since_ms")
+        if recorded_since is None:
+            return False
+        return (
+            recorded.get("symbol") == symbol
+            and recorded.get("interval") == timeframe
+            and recorded.get("native_contract") == self._native_symbol(symbol)
+            and int(since) >= int(recorded_since)
+        )
 
     def _gate_swap_contract_metadata(self, native_contract: str) -> Dict[str, Any]:
         """Return the Gate USDT-settled direct linear contract record, or raise.
@@ -708,8 +751,6 @@ class NativeCryptoPublicClient:
         raw contract counts are never silently forwarded as base volume.
         """
         state = self._gate_swap_state
-        state.identity = None
-        state.bars = {}
         parsed: List[List[Any]] = []
         identity = {
             "symbol": symbol,
@@ -717,6 +758,27 @@ class NativeCryptoPublicClient:
             "since_ms": since_ms,
             "native_contract": self._native_symbol(symbol),
         }
+        previous_identity = getattr(state, "identity", None)
+        merges_previous = (
+            isinstance(previous_identity, dict)
+            and previous_identity.get("symbol") == identity["symbol"]
+            and previous_identity.get("interval") == identity["interval"]
+            and previous_identity.get("native_contract") == identity["native_contract"]
+        )
+        if merges_previous:
+            # The request window starts at its first page, so the bars of the
+            # earlier pages stay inside the recorded window.
+            previous_since = previous_identity.get("since_ms")
+            if previous_since is not None and (
+                since_ms is None or int(previous_since) < int(since_ms)
+            ):
+                identity["since_ms"] = int(previous_since)
+        else:
+            # A different contract, interval or symbol never borrows evidence
+            # from the previous batch (DESIGN-06-002 V1.8 §14.1).
+            state.identity = None
+            state.bars = {}
+            state.returned_stamps = set()
         page_evidence: Dict[int, Dict[str, Any]] = {}
         for row in rows:
             bar_open_utc = int(row.get("t") or 0) * 1000
@@ -835,8 +897,16 @@ class NativeCryptoPublicClient:
                 "historical_applicability": applicability,
                 "normalization_version": "gate_swap_base_v1",
             }
+        # Pages of one request accumulate: a later page overwrites the same bar
+        # timestamp and leaves the other bars untouched (DESIGN-06-002 V1.8 §14.1).
+        merged = dict(getattr(state, "bars", None) or {})
+        merged.update(page_evidence)
+        if len(merged) > _GATE_SWAP_EVIDENCE_MAX_BARS:
+            oldest = sorted(merged)[: len(merged) - _GATE_SWAP_EVIDENCE_MAX_BARS]
+            for stamp in oldest:
+                merged.pop(stamp, None)
         state.identity = identity
-        state.bars = page_evidence
+        state.bars = merged
         state.metadata_markets = self.markets
         return parsed
 
