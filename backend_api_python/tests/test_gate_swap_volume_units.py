@@ -145,6 +145,36 @@ def test_gate_native_to_consumer_preserves_units_projection_and_small_volume(
     }
 
 
+def test_gate_zero_volume_bar_survives_the_consumer_chain(monkeypatch):
+    """D1: a zero-trade bar is projected like any other Gate swap bar.
+
+    Zero volume is a legal market state, not a unit error: the consumer must
+    return the bar, keep the zero volume and the full native evidence, and
+    must not fall back to another source.
+    """
+    source, native = _gate_source(monkeypatch, volume="0", quote="0")
+
+    rows = source.get_kline("BTC/USDT:USDT", "15m", 1)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["volume"] == 0.0
+    assert row["raw_v_contracts"] == 0.0
+    assert row["quote_volume"] == 0.0
+    assert row["volume_unit"] == "base"
+    assert row["volume_normalization_version"] == "gate_swap_base_v1"
+    assert row["volume_historical_applicability"] == "verified"
+    assert set(row["volume_evidence"]) == {
+        "exchange_id", "market_type", "settle", "native_contract", "bar_open_utc",
+        "interval", "raw_v_contracts", "raw_quote_sum", "quanto_multiplier",
+        "base_volume", "quote_volume", "volume_unit", "source_endpoint",
+        "retrieved_at_utc", "metadata_source", "metadata_retrieved_at_utc",
+        "effective_from", "effective_to", "historical_applicability",
+        "normalization_version",
+    }
+    assert row["volume_evidence"]["base_volume"] == 0.0
+
+
 @pytest.mark.parametrize("changes,code", [
     ({"volume_unit": "contracts"}, "EvidenceMissing"),
     ({"normalization_version": "old"}, "EvidenceMissing"),
@@ -352,6 +382,39 @@ def test_gate_real_current_metadata_resampling_consumer(
     assert row["volume_normalization_version"] == "gate_swap_base_v1"
     assert row["volume_historical_applicability"] == "unknown"
     # Aggregate output carries no fabricated per-native-bar research evidence.
+    assert "volume_evidence" not in row
+    assert "raw_v_contracts" not in row
+    assert candle_calls[0]["interval"] == "2h"
+    assert candle_calls[0]["limit"] == 2
+
+
+def test_gate_zero_volume_bar_survives_the_resampling_path(monkeypatch):
+    """D2: an all-zero-trade source window aggregates to a legal zero-volume bar.
+
+    The resampled bar carries no per-native-bar research evidence, so it must
+    stay honestly unknown instead of fabricating evidence, and the consumer
+    must neither raise nor fall back to another source.
+    """
+    zero_trade_bars = [
+        {"t": 1700000000, "o": "100", "h": "100", "l": "100", "c": "100",
+         "v": "0", "sum": "0"},
+        {"t": 1700007200, "o": "100", "h": "100", "l": "100", "c": "100",
+         "v": "0", "sum": "0"},
+    ]
+    source, native, candle_calls = _gate_current_source(
+        monkeypatch, candles=zero_trade_bars
+    )
+    native.timeframes = {"2h": "2h", "1h": "1h"}
+
+    rows = source.get_kline("BTC/USDT:USDT", "4H", 1)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["volume"] == 0.0
+    assert row["volume_unit"] == "base"
+    assert row["volume_normalization_version"] == "gate_swap_base_v1"
+    assert row["volume_historical_applicability"] == "unknown"
+    # An aggregate bar has no single-bar native evidence to project.
     assert "volume_evidence" not in row
     assert "raw_v_contracts" not in row
     assert candle_calls[0]["interval"] == "2h"

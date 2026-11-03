@@ -753,10 +753,16 @@ class NativeCryptoPublicClient:
                     f"{identity['native_contract']} is not a finite positive number"
                 )
             raw_v = row.get("v")
-            raw_v_contracts = self._gate_swap_volume_number(raw_v, "raw_v_contracts")
-            base_volume = self._gate_swap_volume_number(
-                raw_v_contracts * multiplier, "base_volume"
-            )
+            raw_v_contracts = self._gate_swap_volume_zero_ok(raw_v, "raw_v_contracts")
+            if raw_v_contracts == 0.0:
+                # A zero contract count is a real zero-trade bar, not dirty data:
+                # the conversion is exactly 0 and never reaches the product
+                # check (0 x finite positive multiplier is exactly +0.0).
+                base_volume = 0.0
+            else:
+                base_volume = self._gate_swap_volume_number(
+                    raw_v_contracts * multiplier, "base_volume"
+                )
             quote_volume = (
                 None if raw_quote_sum is None
                 else self._gate_swap_volume_number(raw_quote_sum, "sum")
@@ -833,6 +839,30 @@ class NativeCryptoPublicClient:
         state.bars = page_evidence
         state.metadata_markets = self.markets
         return parsed
+
+    @staticmethod
+    def _gate_swap_volume_zero_ok(value: Any, field: str) -> float:
+        """Accept a zero contract count as a legitimate zero-trade bar.
+
+        Only the raw contract count may be zero: null, non-numeric, non-finite
+        and negative values keep the fail-closed ``gate.swapVolumeInvalid``
+        behaviour of :meth:`_gate_swap_volume_number`. Negative zero is not a
+        special case: ``-0.0 == 0`` and ``-0.0 < 0`` is false, so it lands in
+        the zero-trade branch by numeric equality.
+        """
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise NativeCryptoAPIError(
+                f"gate.swapVolumeInvalid: {field} is not numeric"
+            ) from exc
+        if isinstance(value, bool) or not math.isfinite(number) or number < 0:
+            raise NativeCryptoAPIError(
+                f"gate.swapVolumeInvalid: {field} is not a finite valid volume"
+            )
+        if number == 0:
+            return 0.0
+        return number
 
     @staticmethod
     def _gate_swap_volume_number(value: Any, field: str) -> float:

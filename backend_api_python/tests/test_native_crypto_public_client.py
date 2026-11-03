@@ -345,13 +345,110 @@ def test_gate_rejects_non_usdt_settlement(settle):
         )
 
 
-@pytest.mark.parametrize("volume", [None, "", "bad", "0", "-1", "NaN", "Inf", "-Inf", True])
+@pytest.mark.parametrize("volume", [None, "", "bad", "-1", "NaN", "Inf", "-Inf", True])
 def test_gate_rejects_missing_non_positive_or_non_finite_raw_v(volume):
     client = NativeCryptoPublicClient("gate", "swap")
     with pytest.raises(NativeCryptoAPIError, match="gate.swapVolumeInvalid"):
         client._parse_gate_swap_ohlcv(
             [_gate_bar(volume=volume)], symbol="BTC/USDT:USDT", timeframe="15m",
             since_ms=None, metadata=_synthetic_gate_metadata(),
+        )
+
+
+_GATE_SWAP_EVIDENCE_FIELDS = {
+    "exchange_id", "market_type", "settle", "native_contract", "bar_open_utc",
+    "interval", "raw_v_contracts", "raw_quote_sum", "quanto_multiplier",
+    "base_volume", "quote_volume", "volume_unit", "source_endpoint",
+    "retrieved_at_utc", "metadata_source", "metadata_retrieved_at_utc",
+    "effective_from", "effective_to", "historical_applicability",
+    "normalization_version",
+}
+
+
+def test_gate_zero_volume_bar_is_a_valid_zero_trade_bar():
+    """D1: a real zero-trade bar parses with base volume exactly 0.0."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    rows = client._parse_gate_swap_ohlcv(
+        [_gate_bar(volume="0", quote="0")], symbol="BTC/USDT:USDT", timeframe="15m",
+        since_ms=1700000000000, metadata=_synthetic_gate_metadata(),
+    )
+    assert rows == [[1700000000000, 100.0, 110.0, 90.0, 105.0, 0.0]]
+    assert len(rows[0]) == 6
+    evidence = client.get_gate_swap_volume_evidence("BTC/USDT:USDT", "15m", rows[0][0])
+    assert evidence is not None
+    assert set(evidence) == _GATE_SWAP_EVIDENCE_FIELDS
+    assert evidence["base_volume"] == 0.0
+    assert evidence["raw_v_contracts"] == "0"
+    assert evidence["quote_volume"] == 0.0
+    assert evidence["volume_unit"] == "base"
+    assert evidence["normalization_version"] == "gate_swap_base_v1"
+    assert evidence["historical_applicability"] == "verified"
+
+
+def test_gate_zero_volume_bar_in_current_snapshot_stays_unknown(monkeypatch):
+    """D1: zero volume does not upgrade historical applicability."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    market = {
+        "id": "BTC_USDT", "settle": "USDT", "quote": "USDT",
+        "info": {"name": "BTC_USDT", "type": "direct", "quanto_multiplier": "0.01"},
+    }
+    client.markets = {"BTC/USDT:USDT": market, "BTC/USDT": market}
+    monkeypatch.setattr(
+        client,
+        "_get",
+        lambda *_args, **_kwargs: [
+            {"t": 1700000000, "o": "100", "h": "110", "l": "90", "c": "105",
+             "v": "0", "sum": "0"},
+        ],
+    )
+
+    rows = client.fetch_ohlcv("BTC/USDT:USDT", "15m", since=1700000000000, limit=1)
+
+    assert rows == [[1700000000000, 100.0, 110.0, 90.0, 105.0, 0.0]]
+    evidence = client.get_gate_swap_volume_evidence(
+        "BTC/USDT:USDT", "15m", 1700000000000
+    )
+    assert evidence is not None
+    assert evidence["historical_applicability"] == "unknown"
+    assert evidence["metadata_source"] != "synthetic"
+    assert evidence["base_volume"] == 0.0
+
+
+@pytest.mark.parametrize("volume", ["-0", "-0.0"])
+def test_gate_negative_zero_volume_behaves_like_zero_volume(volume):
+    """D1: negative zero is zero by numeric equality, with no sign-bit rule."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    rows = client._parse_gate_swap_ohlcv(
+        [_gate_bar(volume=volume, quote="0")], symbol="BTC/USDT:USDT", timeframe="15m",
+        since_ms=1700000000000, metadata=_synthetic_gate_metadata(),
+    )
+    assert rows == [[1700000000000, 100.0, 110.0, 90.0, 105.0, 0.0]]
+    evidence = client.get_gate_swap_volume_evidence("BTC/USDT:USDT", "15m", rows[0][0])
+    assert evidence is not None
+    assert evidence["base_volume"] == 0.0
+    assert evidence["quote_volume"] == 0.0
+
+
+def test_gate_zero_volume_still_requires_a_multiplier():
+    """D1: the multiplier check runs before any zero-volume semantics."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    with pytest.raises(NativeCryptoAPIError, match="gate.swapVolumeMetadataMissing"):
+        client._parse_gate_swap_ohlcv(
+            [_gate_bar(volume="0")], symbol="BTC/USDT:USDT", timeframe="15m",
+            since_ms=None, metadata={**_synthetic_gate_metadata(),
+                                      "info": {"name": "BTC_USDT", "type": "direct",
+                                               "quanto_multiplier": None}},
+        )
+
+
+@pytest.mark.parametrize("volume", ["1e-300", "0"])
+def test_gate_non_positive_multiplier_still_wins_over_zero_volume(volume):
+    """D1: a non-positive multiplier is rejected before the volume is read."""
+    client = NativeCryptoPublicClient("gate", "swap")
+    with pytest.raises(NativeCryptoAPIError, match="gate.swapVolumeMetadataInvalid"):
+        client._parse_gate_swap_ohlcv(
+            [_gate_bar(volume=volume)], symbol="BTC/USDT:USDT", timeframe="15m",
+            since_ms=None, metadata=_synthetic_gate_metadata(multiplier="0.0"),
         )
 
 

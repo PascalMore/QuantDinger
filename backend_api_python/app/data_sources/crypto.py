@@ -645,7 +645,7 @@ class CryptoDataSource(BaseDataSource):
                     # Aggregated bars carry no native single-bar research
                     # evidence, so none is projected; the already-normalized
                     # base volume is summed exactly without re-multiplying.
-                    if not math.isfinite(candle[5]) or candle[5] <= 0:
+                    if not math.isfinite(candle[5]) or candle[5] < 0:
                         raise NativeCryptoAPIError(
                             "gate.swapVolumeInvalid: normalized volume must match positive native volume"
                         )
@@ -692,7 +692,7 @@ class CryptoDataSource(BaseDataSource):
                             "gate.swapVolumeHistoricalUnverified: native bar applicability is unknown"
                         )
                     if (
-                        not math.isfinite(candle[5]) or candle[5] <= 0
+                        not math.isfinite(candle[5]) or candle[5] < 0
                         or evidence["base_volume"] != candle[5]
                     ):
                         raise NativeCryptoAPIError(
